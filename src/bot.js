@@ -153,6 +153,38 @@ async function autoArchivePastEvents() {
 // Run auto-archive every 10 minutes
 setInterval(autoArchivePastEvents, 10 * 60 * 1000);
 
+// Auto-join voice channel and trigger event at scheduled time
+async function autoStartScheduledEvents() {
+  const schedule = require('./schedule');
+  const { joinConfiguredVoiceChannel } = require('./voice');
+  const now = new Date();
+  const guildId = process.env.ADMIN_GUILD_ID;
+  const voiceChannelId = process.env.DEFAULT_VOICE_CHANNEL_ID;
+  const upcoming = await schedule.getUpcomingSchedule(guildId);
+  for (const event of upcoming) {
+    if (!event.date) continue;
+    const eventDate = new Date(event.date + 'T20:00:00'); // 8PM local
+    // If event is within the last 10 minutes and not yet started (use a startedEvents Set)
+    if (now >= eventDate && now < new Date(eventDate.getTime() + 10 * 60 * 1000)) {
+      global._startedEvents = global._startedEvents || new Set();
+      if (!global._startedEvents.has(event.id)) {
+        // Join the voice channel
+        try {
+          await joinConfiguredVoiceChannel(client, guildId, voiceChannelId);
+          logBot(`Joined voice channel for event ${event.title} (${event.id}) in guild ${guildId}`);
+        } catch (e) {
+          logBot(`Failed to join voice channel for event ${event.id}: ${e.message}`);
+        }
+        // No message in the schedule channel when joining voice
+        global._startedEvents.add(event.id);
+      }
+    }
+  }
+}
+
+// Run auto-start every 1 minute
+setInterval(autoStartScheduledEvents, 60 * 1000);
+
 client.login(process.env.DISCORD_TOKEN);
 
 // In registerHandlers, wrap all command handlers and error handlers to log pertinent activity:
