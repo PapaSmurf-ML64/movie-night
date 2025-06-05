@@ -9,7 +9,6 @@ yarn-error.log
 
 # dotenv environment variables
 .env
-.env.*
 
 # SQLite database
 *.db
