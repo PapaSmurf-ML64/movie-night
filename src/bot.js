@@ -98,7 +98,7 @@ client.once('ready', async () => {
   console.log(`Logged in as ${client.user.tag}`);
   logBot('Bot started');
   // Log invite link with permissions integer
-  const inviteLink = `https://discord.com/oauth2/authorize?client_id=${client.user.id}&scope=bot+applications.commands&permissions=17912164347392`;
+  const inviteLink = `https://discord.com/oauth2/authorize?client_id=${client.user.id}&scope=bot+applications.commands&permissions=17912432782848`;
   console.log('Bot invite link (with correct permissions):', inviteLink);
   // Register slash commands
   const rest = new REST({ version: '10' }).setToken(process.env.DISCORD_TOKEN);
