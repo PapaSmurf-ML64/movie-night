@@ -5,7 +5,7 @@ const media = require('./media');
 const { postOrUpdateSchedule, saveScheduleMessageId } = require('./scheduleEmbed');
 const { joinConfiguredVoiceChannel } = require('./voice');
 const { autoDelete } = require('./util');
-const { logBot } = require('./bot');
+const { logBot } = require('./logger');
 
 // At the top, add a map to track pending movie selections
 const pendingSelections = new Map();
@@ -16,15 +16,20 @@ const pendingAddMovieSessions = new Map();
 function registerHandlers(client, config, DEFAULT_VOICE_CHANNEL_ID, DEFAULT_EVENT_TIME) {
   // Helper: send the Movie Night ping message (used by both scheduleRolePing and !testping)
   async function sendMovieNightPing(channel, role, movies, source = '') {
+    // Always use the Moviegoers role for pings
+    let moviegoersRole = channel.guild.roles.cache.find(r => r.name === 'Moviegoers');
+    if (!moviegoersRole) {
+      await channel.guild.roles.fetch();
+      moviegoersRole = channel.guild.roles.cache.find(r => r.name === 'Moviegoers');
+    }
+    const roleMention = moviegoersRole ? `<@&${moviegoersRole.id}>` : '@everyone';
     if (!Array.isArray(movies)) movies = movies ? [movies] : [];
     if (movies.length === 0) {
-      // No movie scheduled, just send the ping
-      const sentMsg = await channel.send(`${role} Hello moviegoers! Movie night is starting in 5 minutes!`);
+      const sentMsg = await channel.send(`Hello ${roleMention}! Movie night is starting in 5 minutes!`);
       setTimeout(() => { sentMsg.delete().catch(() => {}); }, 60 * 60 * 1000); // 1 hour
       return;
     }
-    // Send the ping message with the first embed
-    const header = `${role} Hello moviegoers! Movie night is starting in 5 minutes and on the schedule for tonight is:`;
+    const header = `Hello ${roleMention}! Movie night is starting in 5 minutes and on the schedule for tonight is:`;
     let sentMsg;
     let first = true;
     for (const movie of movies) {
@@ -39,8 +44,8 @@ function registerHandlers(client, config, DEFAULT_VOICE_CHANNEL_ID, DEFAULT_EVEN
             fields: [
               { name: 'Genres', value: tmdbData.genres && tmdbData.genres.length ? tmdbData.genres.map(g => g.name).join(', ') : 'N/A', inline: true },
               { name: 'User Rating', value: tmdbData.vote_average ? `${tmdbData.vote_average}/10` : 'N/A', inline: true }
-            ],
-            footer: { text: 'Movie Night starts in 5 minutes!' }
+            ]
+            // footer removed
           };
         } catch {}
       }
@@ -84,7 +89,9 @@ function registerHandlers(client, config, DEFAULT_VOICE_CHANNEL_ID, DEFAULT_EVEN
   client.on('messageCreate', async message => {
     if (message.author.bot) return;
     if (message.content.trim().toLowerCase() === '!testping') {
-      if (!message.member.permissions.has('Administrator')) {
+      const adminRoleId = process.env.ADMIN_ROLE_ID;
+      const isAdmin = message.member.roles && (message.member.roles.cache.has(adminRoleId) || message.member.permissions.has('Administrator'));
+      if (!isAdmin) {
         const replyMsg = await message.reply('Only administrators can use this command.');
         autoDelete(replyMsg);
         return;
@@ -111,6 +118,7 @@ function registerHandlers(client, config, DEFAULT_VOICE_CHANNEL_ID, DEFAULT_EVEN
   });
 
   client.on('interactionCreate', async interaction => {
+    console.log('[DEBUG] Received interaction:', interaction.commandName);
     // Log all interactions
     if (interaction.isChatInputCommand()) {
       const { commandName } = interaction;
@@ -148,8 +156,10 @@ function registerHandlers(client, config, DEFAULT_VOICE_CHANNEL_ID, DEFAULT_EVEN
     if (!interaction.isChatInputCommand()) return;
     const { commandName } = interaction;
     const guild_id = interaction.guild?.id;
+    const adminRoleId = process.env.ADMIN_ROLE_ID;
+    const isAdmin = interaction.member.roles && (interaction.member.roles.cache.has(adminRoleId) || interaction.member.permissions.has('Administrator'));
     if (commandName === 'refreshschedule') {
-      if (!interaction.member.permissions.has('Administrator')) {
+      if (!isAdmin) {
         const replyMsg = await interaction.reply('Only administrators can refresh the schedule.');
         autoDelete(replyMsg);
         return;
@@ -241,7 +251,7 @@ function registerHandlers(client, config, DEFAULT_VOICE_CHANNEL_ID, DEFAULT_EVEN
       return;
     }
     if (commandName === 'setchannel') {
-      if (!interaction.member.permissions.has('Administrator')) {
+      if (!isAdmin) {
         const replyMsg = await interaction.reply('Only administrators can set the schedule channel.');
         autoDelete(replyMsg);
         return;
@@ -258,7 +268,7 @@ function registerHandlers(client, config, DEFAULT_VOICE_CHANNEL_ID, DEFAULT_EVEN
       return;
     }
     if (commandName === 'seteventtime') {
-      if (!interaction.member.permissions.has('Administrator')) {
+      if (!isAdmin) {
         const replyMsg = await interaction.reply('Only administrators can set the event time.');
         autoDelete(replyMsg);
         return;
@@ -275,7 +285,7 @@ function registerHandlers(client, config, DEFAULT_VOICE_CHANNEL_ID, DEFAULT_EVEN
       return;
     }
     if (commandName === 'setschedulemsg') {
-      if (!interaction.member.permissions.has('Administrator')) {
+      if (!isAdmin) {
         const replyMsg = await interaction.reply('Only administrators can set the schedule message.');
         autoDelete(replyMsg);
         return;
@@ -429,6 +439,53 @@ function registerHandlers(client, config, DEFAULT_VOICE_CHANNEL_ID, DEFAULT_EVEN
         pendingAddMovieSessions.delete(`${interaction.user.id}_${interaction.id}`);
         logBot(`Error in addmovie by ${interaction.user.id}: ${err.message}`);
       }
+      return;
+    }
+    if (commandName === 'rsvp') {
+      const { addRSVP } = require('./roles');
+      addRSVP(interaction.user.id);
+      // Add Moviegoers role to the user (fetch from guild, not cache, for reliability)
+      let role = interaction.guild.roles.cache.find(r => r.name === 'Moviegoers');
+      if (!role) {
+        // Try to fetch all roles if not found in cache
+        await interaction.guild.roles.fetch();
+        role = interaction.guild.roles.cache.find(r => r.name === 'Moviegoers');
+      }
+      if (role) {
+        try {
+          await interaction.member.roles.add(role);
+        } catch (err) {
+          logBot(`Failed to add Moviegoers role to ${interaction.user.id}: ${err.message}`);
+        }
+      } else {
+        logBot(`Moviegoers role not found in guild ${guild_id}`);
+      }
+      await interaction.reply({ content: 'You have been added to the **Moviegoers** role and will receive notifications for upcoming events! 🎬', ephemeral: true });
+      setTimeout(() => { interaction.deleteReply?.().catch(() => {}); }, 10000); // 10 seconds
+      logBot(`RSVP: ${interaction.user.id} in guild ${guild_id}`);
+      return;
+    }
+    if (commandName === 'unrsvp') {
+      const { removeRSVP } = require('./roles');
+      removeRSVP(interaction.user.id);
+      // Remove Moviegoers role from the user (fetch from guild, not cache, for reliability)
+      let role = interaction.guild.roles.cache.find(r => r.name === 'Moviegoers');
+      if (!role) {
+        await interaction.guild.roles.fetch();
+        role = interaction.guild.roles.cache.find(r => r.name === 'Moviegoers');
+      }
+      if (role) {
+        try {
+          await interaction.member.roles.remove(role);
+        } catch (err) {
+          logBot(`Failed to remove Moviegoers role from ${interaction.user.id}: ${err.message}`);
+        }
+      } else {
+        logBot(`Moviegoers role not found in guild ${guild_id}`);
+      }
+      await interaction.reply({ content: 'You have been removed from the **Moviegoers** role and will no longer receive notifications.', ephemeral: true });
+      setTimeout(() => { interaction.deleteReply?.().catch(() => {}); }, 10000); // 10 seconds
+      logBot(`UnRSVP: ${interaction.user.id} in guild ${guild_id}`);
       return;
     }
     // ...rest of command handlers...

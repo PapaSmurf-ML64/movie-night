@@ -6,7 +6,7 @@ const { registerHandlers } = require('./commands');
 const { getRSVPs, getAttendance } = require('./roles');
 const { joinConfiguredVoiceChannel } = require('./voice');
 const path = require('path');
-const rfs = require('rotating-file-stream');
+const { logBot } = require('./logger');
 
 const client = new Client({
   intents: [
@@ -93,17 +93,7 @@ registerHandlers(client, config, DEFAULT_VOICE_CHANNEL_ID, DEFAULT_EVENT_TIME);
 module.exports.getRSVPs = getRSVPs;
 module.exports.getAttendance = getAttendance;
 
-// Setup log stream
-const logStream = rfs.createStream('bot.log', {
-  interval: '1d', // rotate daily
-  path: path.join(__dirname, '..'),
-  maxFiles: 14
-});
-function logBot(msg) {
-  const line = `[${new Date().toISOString()}] ${msg}\n`;
-  logStream.write(line);
-}
-
+// Log bot startup
 client.once('ready', async () => {
   console.log(`Logged in as ${client.user.tag}`);
   logBot('Bot started');
