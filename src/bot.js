@@ -113,6 +113,46 @@ client.once('ready', async () => {
   }
 });
 
+// Auto-archive events 2 hours after scheduled time
+async function autoArchivePastEvents() {
+  const schedule = require('./schedule');
+  const now = new Date();
+  const guildId = process.env.ADMIN_GUILD_ID;
+  const upcoming = await schedule.getUpcomingSchedule(guildId);
+  for (const event of upcoming) {
+    if (!event.date) continue;
+    const eventDate = new Date(event.date + 'T20:00:00'); // 8PM local
+    const archiveTime = new Date(eventDate.getTime() + 2 * 60 * 60 * 1000); // +2 hours
+    if (now > archiveTime) {
+      // Archive the event
+      await schedule.archiveEvent(event.id, archiveTime.toISOString().slice(0, 10), guildId);
+      logBot(`Auto-archived event ${event.title} (${event.id}) for guild ${guildId}`);
+      // Post to Discord archive thread
+      try {
+        const { ChannelType, ThreadAutoArchiveDuration } = require('discord.js');
+        const guild = await client.guilds.fetch(guildId);
+        let channel = guild.channels.cache.get(config.scheduleChannelId);
+        if (!channel) channel = await guild.channels.fetch(config.scheduleChannelId);
+        const threadName = 'Archived Events';
+        let thread = channel.threads.cache.find(t => t.name === threadName && t.type === ChannelType.PublicThread);
+        if (!thread) {
+          thread = await channel.threads.create({
+            name: threadName,
+            autoArchiveDuration: ThreadAutoArchiveDuration.OneWeek,
+            reason: 'Archive completed movie events',
+          });
+        }
+        await thread.send(`**${event.title}** was watched on ${archiveTime.toISOString().slice(0, 10)}.`);
+      } catch (e) {
+        logBot(`Failed to post to archive thread for event ${event.id}: ${e.message}`);
+      }
+    }
+  }
+}
+
+// Run auto-archive every 10 minutes
+setInterval(autoArchivePastEvents, 10 * 60 * 1000);
+
 client.login(process.env.DISCORD_TOKEN);
 
 // In registerHandlers, wrap all command handlers and error handlers to log pertinent activity:
