@@ -460,7 +460,7 @@ function registerHandlers(client, config, DEFAULT_VOICE_CHANNEL_ID, DEFAULT_EVEN
       } else {
         logBot(`Moviegoers role not found in guild ${guild_id}`);
       }
-      await interaction.reply({ content: 'You have been added to the **Moviegoers** role and will receive notifications for upcoming events! 🎬', ephemeral: true });
+      await interaction.reply({ content: 'You have been added to the **Moviegoers** role and will receive notifications for upcoming events! 🎬', flags: 64 });
       setTimeout(() => { interaction.deleteReply?.().catch(() => {}); }, 10000); // 10 seconds
       logBot(`RSVP: ${interaction.user.id} in guild ${guild_id}`);
       return;
@@ -483,7 +483,7 @@ function registerHandlers(client, config, DEFAULT_VOICE_CHANNEL_ID, DEFAULT_EVEN
       } else {
         logBot(`Moviegoers role not found in guild ${guild_id}`);
       }
-      await interaction.reply({ content: 'You have been removed from the **Moviegoers** role and will no longer receive notifications.', ephemeral: true });
+      await interaction.reply({ content: 'You have been removed from the **Moviegoers** role and will no longer receive notifications.', flags: 64 });
       setTimeout(() => { interaction.deleteReply?.().catch(() => {}); }, 10000); // 10 seconds
       logBot(`UnRSVP: ${interaction.user.id} in guild ${guild_id}`);
       return;
