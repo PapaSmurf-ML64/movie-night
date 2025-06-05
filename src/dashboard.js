@@ -4,6 +4,8 @@ const path = require('path');
 const schedule = require('./schedule');
 const methodOverride = require('method-override');
 const { buildScheduleMappings } = require('./scheduleUtils');
+const roles = require('./roles');
+const rfs = require('rotating-file-stream');
 
 const app = express();
 app.set('view engine', 'ejs');
@@ -86,6 +88,16 @@ async function isAdmin(user) {
   return data.roles.includes(ADMIN_ROLE_ID);
 }
 
+const logStream = rfs.createStream('dashboard.log', {
+  interval: '1d', // rotate daily
+  path: path.join(__dirname, '..'),
+  maxFiles: 14
+});
+function logDashboard(msg) {
+  const line = `[${new Date().toISOString()}] ${msg}\n`;
+  logStream.write(line);
+}
+
 app.get('/', ensureAuthenticated, async (req, res) => {
   if (!(await isAdmin(req.user))) {
     return res.status(403).send('You must be a Discord server admin to access this dashboard.');
@@ -120,46 +132,20 @@ app.get('/', ensureAuthenticated, async (req, res) => {
   const allDates = Array.from(allDatesSet).sort();
   // Build movieByDate, addedByByDate, userMap
   const { movieByDate, addedByByDate, userMap } = await buildScheduleMappings(upcoming, process.env.DISCORD_TOKEN);
-  // Build dashboard schedule for all event dates
-  const dashboardSchedule = allDates.map(dateStr => {
-    const titles = movieByDate[dateStr] ? movieByDate[dateStr].join(', ') : '<empty>';
-    const addedBys = addedByByDate[dateStr] ? addedByByDate[dateStr].map(id => userMap[id] || id).join(', ') : '';
-    return {
-      date: dateStr,
-      title: titles,
-      added_by: addedBys
-    };
-  });
+  const mappings = await buildScheduleMappings(upcoming, process.env.DISCORD_TOKEN);
+  const dashboardSchedule = mappings.dashboardSchedule;
   const archived = await schedule.getArchivedEvents(guild_id);
-  // Get RSVP and attendance from bot
-  let rsvps = [];
-  let attendance = [];
-  // userMap is already defined above, do not redeclare or reassign as const
-  try {
-    const bot = require('./bot');
-    rsvps = bot.getRSVPs ? bot.getRSVPs() : [];
-    attendance = bot.getAttendance ? bot.getAttendance() : [];
-    // Fetch usernames for RSVP/attendance lists
-    if (rsvps.length > 0 || attendance.length > 0) {
-      const userIds = Array.from(new Set([...rsvps, ...attendance]));
-      const fetch = (...args) => import('node-fetch').then(({default: fetch}) => fetch(...args));
-      const promises = userIds.map(async id => {
-        try {
-          const res = await fetch(`https://discord.com/api/v10/users/${id}`, {
-            headers: { Authorization: `Bot ${process.env.DISCORD_TOKEN}` }
-          });
-          if (!res.ok) return null;
-          const data = await res.json();
-          return { id, username: data.username + (data.discriminator && data.discriminator !== '0' ? '#' + data.discriminator : '') };
-        } catch {
-          return null;
-        }
-      });
-      const results = await Promise.all(promises);
-      results.forEach(u => { if (u) userMap[u.id] = u.username; });
-    }
-  } catch {}
-  res.render('dashboard', { dashboardSchedule, archived, user: req.user, rsvps, attendance, userMap, upcoming });
+  // Fetch RSVP and attendance lists
+  const rsvps = roles.getRSVPs ? roles.getRSVPs() : [];
+  const attendance = roles.getAttendance ? roles.getAttendance() : [];
+  // Build a mapping of date -> movies for dashboard (include unscheduled)
+  const dashboardByDate = {};
+  allDates.forEach(dateStr => {
+    dashboardByDate[dateStr] = dashboardSchedule.filter(m => m.date === dateStr);
+  });
+  // Render the dashboard with the schedule data
+  res.render('dashboard', { dashboardSchedule, dashboardByDate, allDates, archived, user: req.user, rsvps, attendance, userMap, upcoming });
+  logDashboard(`Route: / by ${req.user?.id || 'unknown'}`);
 });
 
 // Delete an archived event
@@ -169,10 +155,12 @@ app.post('/delete-archived/:id', ensureAuthenticated, async (req, res) => {
   const guild_id = process.env.ADMIN_GUILD_ID;
   await schedule.removeMovie(id, guild_id);
   res.redirect('/');
+  logDashboard(`Deleted archived event ${id} by ${req.user.id}`);
 });
 
 // Add a route to handle /delete-archived with no id (show error)
 app.post('/delete-archived', ensureAuthenticated, (req, res) => {
+  logDashboard(`Attempted delete-archived with no ID by ${req.user?.id || 'unknown'}`);
   res.status(400).send('Missing archived event ID.');
 });
 
@@ -222,6 +210,13 @@ app.post('/archive/:id', ensureAuthenticated, async (req, res) => {
     // Ignore Discord sync errors for dashboard
   }
   res.redirect('/');
+  logDashboard(`Archived event ${id} to ${archiveDate} by ${req.user.id}`);
+});
+
+// Error handler for uncaught errors in routes
+app.use((err, req, res, next) => {
+  logDashboard(`Error: ${err.message} (user: ${req.user?.id || 'unknown'})`);
+  res.status(500).send('Internal server error.');
 });
 
 // TODO: Add routes for add/remove/reschedule/config
@@ -229,4 +224,5 @@ app.post('/archive/:id', ensureAuthenticated, async (req, res) => {
 const PORT = process.env.DASHBOARD_PORT || 3000;
 app.listen(PORT, () => {
   console.log(`Web dashboard running at http://localhost:${PORT}`);
+  logDashboard('Dashboard started');
 });

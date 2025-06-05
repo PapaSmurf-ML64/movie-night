@@ -12,15 +12,16 @@ db.serialize(() => {
     tmdb_id INTEGER,
     date TEXT,
     added_by TEXT,
-    status TEXT DEFAULT 'scheduled'
+    status TEXT DEFAULT 'scheduled',
+    release_date TEXT
   )`);
 });
 
-function addMovie({ guild_id, title, tmdb_id, date, added_by }) {
+function addMovie({ guild_id, title, tmdb_id, date, added_by, release_date }) {
   return new Promise((resolve, reject) => {
     db.run(
-      `INSERT INTO schedule (guild_id, title, tmdb_id, date, added_by) VALUES (?, ?, ?, ?, ?)`,
-      [guild_id, title, tmdb_id, date, added_by],
+      `INSERT INTO schedule (guild_id, title, tmdb_id, date, added_by, release_date) VALUES (?, ?, ?, ?, ?, ?)`,
+      [guild_id, title, tmdb_id, date, added_by, release_date],
       function (err) {
         if (err) return reject(err);
         resolve(this.lastID);

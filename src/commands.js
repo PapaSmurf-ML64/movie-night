@@ -5,6 +5,12 @@ const media = require('./media');
 const { postOrUpdateSchedule, saveScheduleMessageId } = require('./scheduleEmbed');
 const { joinConfiguredVoiceChannel } = require('./voice');
 const { autoDelete } = require('./util');
+const { logBot } = require('./bot');
+
+// At the top, add a map to track pending movie selections
+const pendingSelections = new Map();
+// At the top, add a map to track pending movie add sessions by user
+const pendingAddMovieSessions = new Map();
 
 // Export a function to register all handlers
 function registerHandlers(client, config, DEFAULT_VOICE_CHANNEL_ID, DEFAULT_EVENT_TIME) {
@@ -105,6 +111,40 @@ function registerHandlers(client, config, DEFAULT_VOICE_CHANNEL_ID, DEFAULT_EVEN
   });
 
   client.on('interactionCreate', async interaction => {
+    // Log all interactions
+    if (interaction.isChatInputCommand()) {
+      const { commandName } = interaction;
+      const userId = interaction.user?.id || 'unknown';
+      const guildId = interaction.guild?.id || 'unknown';
+      logBot(`Command: ${commandName} by ${userId} in guild ${guildId}`);
+    }
+    // Handle select menu for movie selection globally
+    if (interaction.isSelectMenu() && interaction.customId.startsWith('select_movie_')) {
+      const key = `${interaction.user.id}_${interaction.customId}`;
+      const pending = pendingSelections.get(key);
+      if (pending) {
+        const session = pendingAddMovieSessions.get(pending.sessionKey);
+        if (!session) {
+          await interaction.update({ content: 'This selection is no longer valid or has timed out.', components: [] });
+          pendingSelections.delete(key);
+          return;
+        }
+        const idx = parseInt(interaction.values[0], 10);
+        const selected = pending.results[idx];
+        session.selectedMovies.push(selected);
+        session.pendingTitleIdx = pending.selectIdx + 1;
+        pendingSelections.delete(key);
+        await interaction.update({ content: `Selected: ${selected.title} (${selected.release_date ? selected.release_date.slice(0,4) : 'N/A'})`, components: [] });
+        await session.handleNextTitle();
+        logBot(`SelectMenu: User ${interaction.user.id} selected movie for session ${pending.sessionKey}`);
+        return;
+      } else {
+        logBot(`SelectMenu: Invalid or expired selection by user ${interaction.user.id}`);
+        await interaction.reply({ content: 'This selection is no longer valid or has timed out.', ephemeral: true });
+        setTimeout(() => { interaction.deleteReply?.().catch(() => {}); }, 10000);
+      }
+      return;
+    }
     if (!interaction.isChatInputCommand()) return;
     const { commandName } = interaction;
     const guild_id = interaction.guild?.id;
@@ -186,8 +226,10 @@ function registerHandlers(client, config, DEFAULT_VOICE_CHANNEL_ID, DEFAULT_EVEN
           await interaction.reply('Schedule refreshed.');
           autoDelete(sentMsg);
         }
+        logBot(`Schedule refreshed by ${interaction.user.id} in guild ${guild_id}`);
       } catch (err) {
         console.error('[refreshschedule] Error refreshing schedule:', err);
+        logBot(`Error in refreshschedule by ${interaction.user.id}: ${err.message}`);
         try {
           await interaction.reply('Failed to refresh schedule. ' + (err.message || err));
           autoDelete(sentMsg);
@@ -211,6 +253,7 @@ function registerHandlers(client, config, DEFAULT_VOICE_CHANNEL_ID, DEFAULT_EVEN
       }
       config.scheduleChannelId = channel.id;
       await interaction.reply(`Schedule channel set to <#${channel.id}>.`);
+      logBot(`Schedule channel set to ${channel.id} by ${interaction.user.id} in guild ${guild_id}`);
       autoDelete(sentMsg);
       return;
     }
@@ -227,6 +270,7 @@ function registerHandlers(client, config, DEFAULT_VOICE_CHANNEL_ID, DEFAULT_EVEN
       }
       config.eventTime = time;
       await interaction.reply(`Event time set to ${time}.`);
+      logBot(`Event time set to ${time} by ${interaction.user.id} in guild ${guild_id}`);
       autoDelete(sentMsg);
       return;
     }
@@ -243,6 +287,7 @@ function registerHandlers(client, config, DEFAULT_VOICE_CHANNEL_ID, DEFAULT_EVEN
       setScheduleMessageId(msgId);
       // Reply immediately to avoid Discord timeout
       await interaction.reply(`Schedule message ID set to ${msgId}.`);
+      logBot(`Schedule message ID set to ${msgId} by ${interaction.user.id} in guild ${guild_id}`);
       autoDelete(sentMsg);
       // Update the message in the background
       (async () => {
@@ -261,82 +306,132 @@ function registerHandlers(client, config, DEFAULT_VOICE_CHANNEL_ID, DEFAULT_EVEN
     }
     // ...existing or future command handlers...
     if (commandName === 'addmovie') {
-      // Remove ephemeral: always reply non-ephemeral and auto-delete after 30s
       await interaction.deferReply({ ephemeral: false });
       const title = interaction.options.getString('title');
       const date = interaction.options.getString('date');
       const doubleFeature = interaction.options.getBoolean('doublefeature');
+      const year = interaction.options.getInteger ? interaction.options.getInteger('year') : undefined;
       if (!title) {
         const replyMsg = await interaction.editReply('You must provide a movie title.');
-        setTimeout(() => { replyMsg.delete?.().catch(() => {}); }, 30000);
+        setTimeout(() => { replyMsg.delete?.().catch(() => {}); }, 10000);
         return;
       }
       try {
-        // Support comma-separated titles for double feature
         const titles = doubleFeature ? title.split(',').map(t => t.trim()).filter(Boolean) : [title.trim()];
-        const tmdbResults = await Promise.all(titles.map(t => tmdb.searchMovie(t)));
-        const movies = tmdbResults.map((results, i) => {
-          if (!results || results.length === 0) throw new Error(`No TMDB match for "${titles[i]}"`);
-          return results[0];
-        });
-        // Determine date to schedule
-        let scheduleDate = date;
-        if (!scheduleDate) {
-          // Find next available Saturday (skip today if after 8PM)
-          const now = new Date();
-          let nextSaturday = new Date(now);
-          nextSaturday.setHours(20, 0, 0, 0);
-          const day = nextSaturday.getDay();
-          if (!(day === 6 && now < nextSaturday)) {
-            const daysUntilSaturday = (6 - day + 7) % 7 || 7;
-            nextSaturday.setDate(nextSaturday.getDate() + daysUntilSaturday);
+        // Create a session object for this addmovie interaction
+        const sessionKey = `${interaction.user.id}_${interaction.id}`;
+        const session = {
+          interaction,
+          titles,
+          selectedMovies: [],
+          pendingTitleIdx: 0,
+          date,
+          guild_id,
+          year,
+          async handleNextTitle() {
+            if (this.pendingTitleIdx >= this.titles.length) {
+              // All movies selected, proceed to add
+              let scheduleDate = this.date;
+              if (!scheduleDate) {
+                const now = new Date();
+                let nextSaturday = new Date(now);
+                nextSaturday.setHours(20, 0, 0, 0);
+                const day = nextSaturday.getDay();
+                if (!(day === 6 && now < nextSaturday)) {
+                  const daysUntilSaturday = (6 - day + 7) % 7 || 7;
+                  nextSaturday.setDate(nextSaturday.getDate() + daysUntilSaturday);
+                }
+                const upcoming = await schedule.getUpcomingSchedule(this.guild_id);
+                const takenDates = new Set(upcoming.map(m => m.date));
+                let d = new Date(nextSaturday);
+                while (takenDates.has(d.toISOString().slice(0, 10))) {
+                  d.setDate(d.getDate() + 7);
+                }
+                scheduleDate = d.toISOString().slice(0, 10);
+              }
+              const addedIds = [];
+              for (let i = 0; i < this.selectedMovies.length; i++) {
+                let m = this.selectedMovies[i];
+                if (!m.release_date && m.id) {
+                  try {
+                    const details = await tmdb.getMovieDetails(m.id);
+                    m.release_date = details.release_date;
+                  } catch {}
+                }
+                const id = await schedule.addMovie({
+                  guild_id: this.guild_id,
+                  title: m.title,
+                  tmdb_id: m.id,
+                  date: scheduleDate,
+                  added_by: this.interaction.user.id,
+                  release_date: m.release_date
+                });
+                addedIds.push(id);
+              }
+              const replyMsg = await this.interaction.editReply(`Movie(s) added to the schedule for ${scheduleDate}.`);
+              setTimeout(() => { replyMsg.delete?.().catch(() => {}); }, 10000);
+              let channel = this.interaction.channel;
+              if (config.scheduleChannelId) {
+                try {
+                  channel = await this.interaction.guild.channels.fetch(config.scheduleChannelId);
+                } catch {}
+              }
+              await postOrUpdateSchedule(channel, this.guild_id);
+              pendingAddMovieSessions.delete(sessionKey);
+              logBot(`Schedule updated for guild ${this.guild_id}`);
+              return;
+            }
+            // Handle the next title
+            const t = this.titles[this.pendingTitleIdx];
+            const results = await tmdb.searchMovie(t, this.year);
+            if (!results || results.length === 0) throw new Error(`No TMDB match for "${t}"${this.year ? ` (${this.year})` : ''}`);
+            results.sort((a, b) => (b.popularity || 0) - (a.popularity || 0));
+            if (results.length === 1) {
+              this.selectedMovies.push(results[0]);
+              this.pendingTitleIdx++;
+              await this.handleNextTitle();
+            } else {
+              const selectId = `select_movie_${interaction.id}_${this.pendingTitleIdx}`;
+              const options = results.slice(0, 25).map((m, i) => ({
+                label: `${m.title} (${m.release_date ? m.release_date.slice(0,4) : 'N/A'})`,
+                value: String(i)
+              }));
+              pendingSelections.set(`${interaction.user.id}_${selectId}`, {
+                sessionKey,
+                results,
+                selectIdx: this.pendingTitleIdx
+              });
+              await this.interaction.editReply({
+                content: `Multiple matches found for "${t}"${this.year ? ` (${this.year})` : ''}. Please select the correct movie:`,
+                components: [
+                  {
+                    type: 1, // ACTION_ROW
+                    components: [
+                      {
+                        type: 3, // SELECT_MENU
+                        custom_id: selectId,
+                        options
+                      }
+                    ]
+                  }
+                ]
+              });
+              return;
+            }
           }
-          // Find first Saturday with <empty> slot
-          const upcoming = await schedule.getUpcomingSchedule(guild_id);
-          const takenDates = new Set(upcoming.map(m => m.date));
-          let d = new Date(nextSaturday);
-          while (takenDates.has(d.toISOString().slice(0, 10))) {
-            d.setDate(d.getDate() + 7);
-          }
-          scheduleDate = d.toISOString().slice(0, 10);
-        }
-        // Add each movie (for double feature, same date)
-        const addedIds = [];
-        for (let i = 0; i < movies.length; i++) {
-          const m = movies[i];
-          const id = await schedule.addMovie({
-            guild_id,
-            title: m.title,
-            tmdb_id: m.id,
-            date: scheduleDate,
-            added_by: interaction.user.id
-          });
-          addedIds.push(id);
-        }
-        const replyMsg = await interaction.editReply(`Movie(s) added to the schedule for ${scheduleDate}.`);
-        setTimeout(() => { replyMsg.delete?.().catch(() => {}); }, 30000);
-        // Optionally update the schedule message
-        let channel = interaction.channel;
-        if (config.scheduleChannelId) {
-          try {
-            channel = await interaction.guild.channels.fetch(config.scheduleChannelId);
-          } catch {}
-        }
-        await postOrUpdateSchedule(channel, guild_id);
+        };
+        pendingAddMovieSessions.set(sessionKey, session);
+        logBot(`AddMovie: Session started by ${interaction.user.id} in guild ${guild_id} for titles: ${titles.join(', ')}`);
+        await session.handleNextTitle();
       } catch (err) {
         const replyMsg = await interaction.editReply(`Failed to add movie: ${err.message || err}`);
-        setTimeout(() => { replyMsg.delete?.().catch(() => {}); }, 30000);
+        setTimeout(() => { replyMsg.delete?.().catch(() => {}); }, 10000);
+        pendingAddMovieSessions.delete(`${interaction.user.id}_${interaction.id}`);
+        logBot(`Error in addmovie by ${interaction.user.id}: ${err.message}`);
       }
       return;
     }
-    if (commandName === 'startevent') {
-      await interaction.reply({ content: 'Start event command not yet implemented.', ephemeral: true });
-      return;
-    }
-    if (commandName === 'stopevent') {
-      await interaction.reply({ content: 'Stop event command not yet implemented.', ephemeral: true });
-      return;
-    }
+    // ...rest of command handlers...
   });
 }
 

@@ -9,10 +9,17 @@ async function buildScheduleMappings(upcoming, discordToken) {
     if (m.date) {
       if (!movieByDate[m.date]) movieByDate[m.date] = [];
       if (!addedByByDate[m.date]) addedByByDate[m.date] = [];
-      movieByDate[m.date].push(m.title);
+      // Store as object with title and release_date from DB
+      movieByDate[m.date].push({ title: m.title, release_date: m.release_date });
       addedByByDate[m.date].push(m.added_by || '');
     }
   });
+  // For dashboard: also return a flat list with title and release_date for each event
+  const dashboardSchedule = upcoming.map(m => ({
+    ...m,
+    title: m.title,
+    release_date: m.release_date
+  }));
   // Fetch usernames for all unique added_by IDs
   let userMap = {};
   const userIds = Array.from(new Set(Object.values(addedByByDate).flat().filter(Boolean)));
@@ -29,7 +36,7 @@ async function buildScheduleMappings(upcoming, discordToken) {
     const results = await Promise.all(promises);
     results.forEach(u => { if (u) userMap[u.id] = u.username; });
   }
-  return { movieByDate, addedByByDate, userMap };
+  return { movieByDate, addedByByDate, userMap, dashboardSchedule };
 }
 
 module.exports = { buildScheduleMappings };

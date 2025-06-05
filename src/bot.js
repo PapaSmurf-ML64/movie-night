@@ -6,6 +6,7 @@ const { registerHandlers } = require('./commands');
 const { getRSVPs, getAttendance } = require('./roles');
 const { joinConfiguredVoiceChannel } = require('./voice');
 const path = require('path');
+const rfs = require('rotating-file-stream');
 
 const client = new Client({
   intents: [
@@ -32,7 +33,9 @@ const commands = [
     .addStringOption(option =>
       option.setName('date').setDescription('Optional date for viewing (YYYY-MM-DD)').setRequired(false))
     .addBooleanOption(option =>
-      option.setName('doublefeature').setDescription('Add as a double feature (multiple movies on the same day)').setRequired(false)),
+      option.setName('doublefeature').setDescription('Add as a double feature (multiple movies on the same day)').setRequired(false))
+    .addIntegerOption(option =>
+      option.setName('year').setDescription('Optional release year for TMDB search').setRequired(false)),
   new SlashCommandBuilder()
     .setName('startevent')
     .setDescription('Start the next scheduled movie event'),
@@ -90,8 +93,20 @@ registerHandlers(client, config, DEFAULT_VOICE_CHANNEL_ID, DEFAULT_EVENT_TIME);
 module.exports.getRSVPs = getRSVPs;
 module.exports.getAttendance = getAttendance;
 
+// Setup log stream
+const logStream = rfs.createStream('bot.log', {
+  interval: '1d', // rotate daily
+  path: path.join(__dirname, '..'),
+  maxFiles: 14
+});
+function logBot(msg) {
+  const line = `[${new Date().toISOString()}] ${msg}\n`;
+  logStream.write(line);
+}
+
 client.once('ready', async () => {
   console.log(`Logged in as ${client.user.tag}`);
+  logBot('Bot started');
   // Log invite link with permissions integer
   const inviteLink = `https://discord.com/oauth2/authorize?client_id=${client.user.id}&scope=bot+applications.commands&permissions=17912164347392`;
   console.log('Bot invite link (with correct permissions):', inviteLink);
@@ -109,3 +124,9 @@ client.once('ready', async () => {
 });
 
 client.login(process.env.DISCORD_TOKEN);
+
+// In registerHandlers, wrap all command handlers and error handlers to log pertinent activity:
+// Example:
+// logBot(`Command: ${commandName} by ${interaction.user?.id || 'unknown'}`);
+// logBot(`Error: ${err.message}`);
+// logBot(`Schedule updated for guild ${guild_id}`);

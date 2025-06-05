@@ -93,7 +93,10 @@ async function postOrUpdateSchedule(channel, guild_id) {
   const titleCol = Math.max(maxDateLen + 2, minTitleCol);
   allDates.forEach((dateStr, i) => {
     let formattedDate = formattedDates[i];
-    const titles = movieByDate[dateStr] ? movieByDate[dateStr].join(', ') : '<empty>';
+    const movies = movieByDate[dateStr] || [];
+    const titles = movies.length
+      ? movies.map(m => m.release_date ? `${m.title} (${m.release_date.slice(0,4)})` : m.title).join(', ')
+      : '<empty>';
     lines.push(`${formattedDate} — ${titles}`);
   });
   const scheduleText = lines.join('\n');
