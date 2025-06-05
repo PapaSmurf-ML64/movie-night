@@ -1,0 +1,35 @@
+# Node.js
+node_modules/
+npm-debug.log
+yarn-debug.log
+yarn-error.log
+
+# Logs
+*.log
+
+# dotenv environment variables
+.env
+.env.*
+
+# SQLite database
+*.db
+
+# VS Code
+.vscode/
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Output
+nohup.out
+
+# Misc
+*.swp
+*.swo
+
+# Ignore dashboard log
+/dashboard.log
+
+# Ignore schedule message id file
+schedule-message-id.txt

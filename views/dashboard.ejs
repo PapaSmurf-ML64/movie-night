@@ -1,0 +1,110 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>Movie Night Dashboard</title>
+  <style>
+    body { font-family: sans-serif; margin: 2em; }
+    h1 { color: #333; }
+    .section { margin-bottom: 2em; }
+    table { border-collapse: collapse; width: 100%; }
+    th, td { border: 1px solid #ccc; padding: 0.5em; }
+    th { background: #eee; }
+  </style>
+</head>
+<body>
+  <h1>Movie Night Dashboard</h1>
+  <div class="section">
+    <h2>Upcoming Schedule</h2>
+    <% if (dashboardSchedule.length === 0) { %>
+      <p>No movies scheduled.</p>
+    <% } else { %>
+      <table>
+        <tr><th>Date</th><th>Title</th><th>Added By</th></tr>
+        <% function formatDate(dateStr) {
+             const date = new Date(dateStr);
+             const months = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
+             const day = date.getDate();
+             const year = date.getFullYear();
+             const month = months[date.getMonth()];
+             // Add ordinal suffix
+             function ordinal(n) {
+               if (n > 3 && n < 21) return n + 'th';
+               switch (n % 10) {
+                 case 1: return n + 'st';
+                 case 2: return n + 'nd';
+                 case 3: return n + 'rd';
+                 default: return n + 'th';
+               }
+             }
+             return `${month} ${ordinal(day)}, ${year}`;
+           }
+        %>
+        <% dashboardSchedule.forEach(m => { %>
+          <tr>
+            <td><%= m.title === '<empty>' ? '' : formatDate(m.date) %></td>
+            <td><%= m.title %></td>
+            <td><%= m.added_by %></td>
+          </tr>
+        <% }) %>
+      </table>
+    <% } %>
+  </div>
+  <div class="section">
+    <h2>Archived Events</h2>
+    <% if (archived.length === 0) { %>
+      <p>No archived events.</p>
+    <% } else { %>
+      <table>
+        <tr><th>Title</th><th>Date Watched</th><th>Actions</th></tr>
+        <% archived.forEach(e => { %>
+          <tr>
+            <td><%= e.title %></td>
+            <td><%= e.date %></td>
+            <td>
+              <form action="/delete-archived/<%= e.id %>" method="post" style="display:inline" onsubmit="return confirm('Delete this archived event?');">
+                <button type="submit">Delete</button>
+              </form>
+            </td>
+          </tr>
+        <% }) %>
+      </table>
+    <% } %>
+  </div>
+  <div class="section">
+    <h2>RSVP List</h2>
+    <% if (rsvps.length === 0) { %>
+      <p>No one has RSVP'd yet.</p>
+    <% } else { %>
+      <ul>
+        <% rsvps.forEach(u => { %>
+          <li>
+            <% if (userMap && userMap[u]) { %>
+              <%= userMap[u] %> (<%= u %>)
+            <% } else { %>
+              <%= u %>
+            <% } %>
+          </li>
+        <% }) %>
+      </ul>
+    <% } %>
+  </div>
+  <div class="section">
+    <h2>Attendance List</h2>
+    <% if (attendance.length === 0) { %>
+      <p>No attendees yet.</p>
+    <% } else { %>
+      <ul>
+        <% attendance.forEach(u => { %>
+          <li>
+            <% if (userMap && userMap[u]) { %>
+              <%= userMap[u] %> (<%= u %>)
+            <% } else { %>
+              <%= u %>
+            <% } %>
+          </li>
+        <% }) %>
+      </ul>
+    <% } %>
+  </div>
+</body>
+</html>
