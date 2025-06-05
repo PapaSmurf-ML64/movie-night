@@ -19,32 +19,59 @@
       <p>No movies scheduled.</p>
     <% } else { %>
       <table>
-        <tr><th>Date</th><th>Title</th><th>Added By</th></tr>
+        <tr><th>Date</th><th>Title</th><th>Added By</th><th>Actions</th></tr>
         <% function formatDate(dateStr) {
-             const date = new Date(dateStr);
-             const months = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
-             const day = date.getDate();
-             const year = date.getFullYear();
-             const month = months[date.getMonth()];
-             // Add ordinal suffix
-             function ordinal(n) {
-               if (n > 3 && n < 21) return n + 'th';
-               switch (n % 10) {
-                 case 1: return n + 'st';
-                 case 2: return n + 'nd';
-                 case 3: return n + 'rd';
-                 default: return n + 'th';
-               }
-             }
-             return `${month} ${ordinal(day)}, ${year}`;
-           }
+          // Fix: always use UTC for date math to avoid timezone shifting
+          const date = new Date(dateStr + 'T20:00:00Z');
+          const months = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
+          const day = date.getUTCDate();
+          const year = date.getUTCFullYear();
+          const month = months[date.getUTCMonth()];
+          // Add ordinal suffix
+          function ordinal(n) {
+            if (n > 3 && n < 21) return n + 'th';
+            switch (n % 10) {
+              case 1: return n + 'st';
+              case 2: return n + 'nd';
+              case 3: return n + 'rd';
+              default: return n + 'th';
+            }
+          }
+          return `${month} ${ordinal(day)}, ${year}`;
+        }
         %>
-        <% dashboardSchedule.forEach(m => { %>
-          <tr>
-            <td><%= m.title === '<empty>' ? '' : formatDate(m.date) %></td>
-            <td><%= m.title %></td>
-            <td><%= m.added_by %></td>
-          </tr>
+        <% 
+          const now = new Date(); // Fix: define now for use in date logic
+          // Build a list of all unique dates (Saturdays + special events)
+          const allDatesSet = new Set();
+          // Add all event dates from the database (not just Saturdays)
+          dashboardSchedule.forEach(m => {
+            if (m.date) allDatesSet.add(m.date);
+          });
+          // Sort all dates
+          const allDates = Array.from(allDatesSet).sort();
+        %>
+        <% allDates.forEach(dateStr => { %>
+          <% const moviesForDate = dashboardSchedule.filter(m => m.date === dateStr); %>
+          <% const isSaturday = new Date(dateStr).getDay() === 6; %>
+          <% moviesForDate.forEach((m, idx) => { %>
+            <tr>
+              <td><%= formatDate(m.date) %> <% if (!isSaturday) { %><span style="color:#b00;font-weight:bold;">(Special Event)</span><% } %></td>
+              <td><%= m.title %></td>
+              <td><%= m.added_by.split(',')[0] %></td>
+              <td>
+                <% const eventId = upcoming.find(u => u.date === m.date && u.title === m.title)?.id; %>
+                <% if (m.title !== '<empty>' && eventId) { %>
+                  <form action="/archive/<%= eventId %>" method="post" style="display:inline" onsubmit="return confirm('Archive this event?');">
+                    <button type="submit">Archive</button>
+                  </form>
+                  <form action="/delete-archived/<%= eventId %>" method="post" style="display:inline" onsubmit="return confirm('Delete this event?');">
+                    <button type="submit">Delete</button>
+                  </form>
+                <% } %>
+              </td>
+            </tr>
+          <% }) %>
         <% }) %>
       </table>
     <% } %>

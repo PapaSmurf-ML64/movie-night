@@ -3,6 +3,7 @@ const express = require('express');
 const path = require('path');
 const schedule = require('./schedule');
 const methodOverride = require('method-override');
+const { buildScheduleMappings } = require('./scheduleUtils');
 
 const app = express();
 app.set('view engine', 'ejs');
@@ -21,7 +22,12 @@ app.use(session({
   secret: DASHBOARD_SECRET, 
   resave: false, 
   saveUninitialized: false, 
-  cookie: { maxAge: 30 * 24 * 60 * 60 * 1000 } // 30 days
+  cookie: { 
+    maxAge: 30 * 24 * 60 * 60 * 1000, // 30 days
+    sameSite: 'lax',
+    secure: false // Set to true if using HTTPS
+  },
+  store: new (require('session-file-store')(session))({ path: './.sessions', retries: 1 })
 }));
 app.use(passport.initialize());
 app.use(passport.session());
@@ -84,17 +90,15 @@ app.get('/', ensureAuthenticated, async (req, res) => {
   if (!(await isAdmin(req.user))) {
     return res.status(403).send('You must be a Discord server admin to access this dashboard.');
   }
+  const guild_id = process.env.ADMIN_GUILD_ID;
   // Get all scheduled movies and build a map by date
-  const upcoming = await schedule.getUpcomingSchedule();
+  const upcoming = await schedule.getUpcomingSchedule(guild_id);
   // Find the next Saturday from today (skip today if after 8PM)
   const now = new Date();
   let nextSaturday = new Date(now);
   nextSaturday.setHours(20, 0, 0, 0); // 8PM
   const day = nextSaturday.getDay();
-  if (day === 6 && now < nextSaturday) {
-    // Today is Saturday and before 8PM, use today
-  } else {
-    // Otherwise, find the next Saturday
+  if (!(day === 6 && now < nextSaturday)) {
     const daysUntilSaturday = (6 - day + 7) % 7 || 7;
     nextSaturday.setDate(nextSaturday.getDate() + daysUntilSaturday);
   }
@@ -106,33 +110,31 @@ app.get('/', ensureAuthenticated, async (req, res) => {
     saturdays.push(new Date(d));
     d.setDate(d.getDate() + 7);
   }
-  // Build dashboard schedule list to match Discord
-  // Support multiple movies per date (double feature)
-  const movieByDate = {};
-  const addedByByDate = {};
+  // Add all special event dates (non-Saturdays) from the database
+  const allDatesSet = new Set(saturdays.map(date => date.toISOString().slice(0, 10)));
   upcoming.forEach(m => {
-    if (m.date) {
-      if (!movieByDate[m.date]) movieByDate[m.date] = [];
-      if (!addedByByDate[m.date]) addedByByDate[m.date] = [];
-      movieByDate[m.date].push(m.title);
-      addedByByDate[m.date].push(m.added_by || '');
+    if (m.date && !allDatesSet.has(m.date)) {
+      allDatesSet.add(m.date);
     }
   });
-  const dashboardSchedule = saturdays.map(date => {
-    const dateStr = date.toISOString().slice(0, 10);
+  const allDates = Array.from(allDatesSet).sort();
+  // Build movieByDate, addedByByDate, userMap
+  const { movieByDate, addedByByDate, userMap } = await buildScheduleMappings(upcoming, process.env.DISCORD_TOKEN);
+  // Build dashboard schedule for all event dates
+  const dashboardSchedule = allDates.map(dateStr => {
     const titles = movieByDate[dateStr] ? movieByDate[dateStr].join(', ') : '<empty>';
-    const addedBys = addedByByDate[dateStr] ? addedByByDate[dateStr].join(', ') : '';
+    const addedBys = addedByByDate[dateStr] ? addedByByDate[dateStr].map(id => userMap[id] || id).join(', ') : '';
     return {
       date: dateStr,
       title: titles,
       added_by: addedBys
     };
   });
-  const archived = await schedule.getArchivedEvents();
+  const archived = await schedule.getArchivedEvents(guild_id);
   // Get RSVP and attendance from bot
   let rsvps = [];
   let attendance = [];
-  let userMap = {};
+  // userMap is already defined above, do not redeclare or reassign as const
   try {
     const bot = require('./bot');
     rsvps = bot.getRSVPs ? bot.getRSVPs() : [];
@@ -157,23 +159,30 @@ app.get('/', ensureAuthenticated, async (req, res) => {
       results.forEach(u => { if (u) userMap[u.id] = u.username; });
     }
   } catch {}
-  res.render('dashboard', { dashboardSchedule, archived, user: req.user, rsvps, attendance, userMap });
+  res.render('dashboard', { dashboardSchedule, archived, user: req.user, rsvps, attendance, userMap, upcoming });
 });
 
 // Delete an archived event
 app.post('/delete-archived/:id', ensureAuthenticated, async (req, res) => {
   if (!(await isAdmin(req.user))) return res.status(403).send('Forbidden');
   const id = req.params.id;
-  await schedule.removeMovie(id);
+  const guild_id = process.env.ADMIN_GUILD_ID;
+  await schedule.removeMovie(id, guild_id);
   res.redirect('/');
+});
+
+// Add a route to handle /delete-archived with no id (show error)
+app.post('/delete-archived', ensureAuthenticated, (req, res) => {
+  res.status(400).send('Missing archived event ID.');
 });
 
 // Archive a movie (set status to archived and set date to next available Saturday, and sync with Discord)
 app.post('/archive/:id', ensureAuthenticated, async (req, res) => {
   if (!(await isAdmin(req.user))) return res.status(403).send('Forbidden');
   const id = req.params.id;
+  const guild_id = process.env.ADMIN_GUILD_ID;
   // Find the movie info
-  const upcoming = await schedule.getUpcomingSchedule();
+  const upcoming = await schedule.getUpcomingSchedule(guild_id);
   const movie = upcoming.find(m => m.id == id);
   if (!movie) return res.status(404).send('Movie not found');
   // Calculate next available Saturday at 8PM EST (sync with bot logic)
@@ -187,7 +196,7 @@ app.post('/archive/:id', ensureAuthenticated, async (req, res) => {
     nextSaturday.setDate(nextSaturday.getDate() + (index * 7));
   }
   const archiveDate = nextSaturday.toISOString().slice(0, 10);
-  await schedule.archiveEvent(id, archiveDate);
+  await schedule.archiveEvent(id, archiveDate, guild_id);
 
   // Discord sync: post to archive thread
   try {

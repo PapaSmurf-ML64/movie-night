@@ -53,20 +53,12 @@ const commands = [
     .addStringOption(option =>
       option.setName('time').setDescription('Event time').setRequired(true)),
   new SlashCommandBuilder()
-    .setName('removemovie')
-    .setDescription('Remove a movie from the schedule by ID')
-    .addIntegerOption(option =>
-      option.setName('id').setDescription('Movie ID to remove').setRequired(true)),
-  new SlashCommandBuilder()
     .setName('reschedulemovie')
     .setDescription('Reschedule a movie by ID')
     .addIntegerOption(option =>
       option.setName('id').setDescription('Movie ID to reschedule').setRequired(true))
     .addStringOption(option =>
       option.setName('date').setDescription('New date (YYYY-MM-DD)').setRequired(true)),
-  new SlashCommandBuilder()
-    .setName('archivedevents')
-    .setDescription('List archived (watched) events'),
   new SlashCommandBuilder()
     .setName('rsvp')
     .setDescription('RSVP for the next movie night'),
@@ -100,6 +92,9 @@ module.exports.getAttendance = getAttendance;
 
 client.once('ready', async () => {
   console.log(`Logged in as ${client.user.tag}`);
+  // Log invite link with permissions integer
+  const inviteLink = `https://discord.com/oauth2/authorize?client_id=${client.user.id}&scope=bot+applications.commands&permissions=17912164347392`;
+  console.log('Bot invite link (with correct permissions):', inviteLink);
   // Register slash commands
   const rest = new REST({ version: '10' }).setToken(process.env.DISCORD_TOKEN);
   try {
