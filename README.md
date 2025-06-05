@@ -47,4 +47,5 @@ A Discord bot and dashboard for organizing and streaming movie nights from Plex 
 - All sensitive files are ignored by `.gitignore`
 
 ## License
-MIT
+
+This project is licensed under the GNU General Public License v3.0. See the LICENSE file for details.
