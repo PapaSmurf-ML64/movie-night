@@ -35,3 +35,5 @@ schedule-message-id.txt
 
 # Ignore session files
 .sessions/
+bot.log.txt
+dashboard.log.txt
