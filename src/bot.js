@@ -122,11 +122,12 @@ async function autoArchivePastEvents() {
   const upcoming = await schedule.getUpcomingSchedule(guildId);
   for (const event of upcoming) {
     if (!event.date) continue;
-    const eventDate = new Date(event.date + 'T20:00:00Z'); // 8PM UTC
-    const archiveTime = new Date(eventDate.getTime() + 2 * 60 * 60 * 1000); // +2 hours
-    if (now > archiveTime) {
+    // Use Luxon for DST-correct 8PM Eastern
+    const eventDateEastern = DateTime.fromISO(event.date + 'T20:00:00', { zone: 'America/New_York' });
+    const archiveTime = eventDateEastern.plus({ hours: 2 }).toUTC();
+    if (DateTime.utc() > archiveTime) {
       // Archive the event
-      await schedule.archiveEvent(event.id, archiveTime.toISOString().slice(0, 10), guildId);
+      await schedule.archiveEvent(event.id, archiveTime.toISODate(), guildId);
       logBot(`Auto-archived event ${event.title} (${event.id}) for guild ${guildId}`);
       // Post to Discord archive thread
       try {
@@ -143,7 +144,7 @@ async function autoArchivePastEvents() {
             reason: 'Archive completed movie events',
           });
         }
-        await thread.send(`**${event.title}** was watched on ${archiveTime.toISOString().slice(0, 10)}.`);
+        await thread.send(`**${event.title}** was watched on ${archiveTime.toISODate()}.`);
       } catch (e) {
         logBot(`Failed to post to archive thread for event ${event.id}: ${e.message}`);
       }
@@ -187,9 +188,42 @@ async function autoStartScheduledEvents() {
         if (!channel) channel = await guild.channels.fetch(config.scheduleChannelId);
         const moviegoersRole = guild.roles.cache.find(r => r.name === 'Moviegoers');
         let roleMention = moviegoersRole ? `<@&${moviegoersRole.id}>` : '@everyone';
-        await channel.send({
-          content: `${roleMention} Movie Night starts in 5 minutes: **${event.title}**! Get ready to join the voice channel!`
-        });
+        // Fetch all movies for this event date
+        const movies = (await require('./schedule').getUpcomingSchedule(guildId)).filter(m => m.date === event.date);
+        const tmdb = require('./tmdb');
+        let sentMsg;
+        if (movies.length === 0) {
+          sentMsg = await channel.send(`${roleMention} Movie Night starts in 5 minutes!`);
+          setTimeout(() => { sentMsg.delete().catch(() => {}); }, 60 * 60 * 1000);
+        } else {
+          const header = `${roleMention} Movie night is starting in 5 minutes and on the schedule for tonight is:`;
+          let first = true;
+          for (const movie of movies) {
+            let embed = null;
+            if (movie && movie.tmdb_id) {
+              try {
+                const tmdbData = await tmdb.getMovieDetails(movie.tmdb_id);
+                embed = {
+                  color: 0xFFD700,
+                  title: `${tmdbData.title} (${tmdbData.release_date ? tmdbData.release_date.slice(0,4) : ''})`,
+                  description: tmdbData.overview || '',
+                  fields: [
+                    { name: 'Genres', value: tmdbData.genres && tmdbData.genres.length ? tmdbData.genres.map(g => g.name).join(', ') : 'N/A', inline: true },
+                    { name: 'User Rating', value: tmdbData.vote_average ? `${tmdbData.vote_average}/10` : 'N/A', inline: true }
+                  ]
+                };
+              } catch {}
+            }
+            if (first) {
+              sentMsg = await channel.send({ content: header, embeds: embed ? [embed] : [] });
+              setTimeout(() => { sentMsg.delete().catch(() => {}); }, 60 * 60 * 1000);
+              first = false;
+            } else if (embed) {
+              sentMsg = await channel.send({ embeds: [embed] });
+              setTimeout(() => { sentMsg.delete().catch(() => {}); }, 60 * 60 * 1000);
+            }
+          }
+        }
         logBot(`Sent 5-min pre-event ping for event ${event.title} (${event.id}) in channel ${config.scheduleChannelId}`);
       } catch (e) {
         logBot(`Failed to send 5-min pre-event ping for event ${event.id}: ${e.message}`);

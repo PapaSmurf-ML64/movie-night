@@ -224,25 +224,25 @@ function registerHandlers(client, config, DEFAULT_VOICE_CHANNEL_ID, DEFAULT_EVEN
           try {
             const newMsg = await channel.send({ embeds: [embed] });
             saveScheduleMessageId(newMsg.id);
-            await interaction.reply('Schedule refreshed and new embed posted.');
-            autoDelete(sentMsg);
+            const replyMsg = await interaction.reply('Schedule refreshed and new embed posted.');
+            autoDelete(replyMsg);
           } catch (err2) {
             console.error('[refreshschedule] Failed to post new schedule embed:', err2);
-            await interaction.reply('Failed to post new schedule embed. ' + (err2.message || err2));
-            autoDelete(sentMsg);
+            const replyMsg = await interaction.reply('Failed to post new schedule embed. ' + (err2.message || err2));
+            autoDelete(replyMsg);
           }
         } else {
           saveScheduleMessageId(msg.id);
-          await interaction.reply('Schedule refreshed.');
-          autoDelete(sentMsg);
+          const replyMsg = await interaction.reply('Schedule refreshed.');
+          autoDelete(replyMsg);
         }
         logBot(`Schedule refreshed by ${interaction.user.id} in guild ${guild_id}`);
       } catch (err) {
         console.error('[refreshschedule] Error refreshing schedule:', err);
         logBot(`Error in refreshschedule by ${interaction.user.id}: ${err.message}`);
         try {
-          await interaction.reply('Failed to refresh schedule. ' + (err.message || err));
-          autoDelete(sentMsg);
+          const replyMsg = await interaction.reply('Failed to refresh schedule. ' + (err.message || err));
+          autoDelete(replyMsg);
         } catch (e) {
           // If reply fails, log
           console.error('[refreshschedule] Failed to reply to interaction:', e);
