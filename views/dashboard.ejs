@@ -85,24 +85,66 @@
   </div>
   <div class="section">
     <h2>Archived Events</h2>
+    <input type="text" id="archivedSearch" placeholder="Search archived events..." style="margin-bottom:10px;width:100%;padding:0.5em;" onkeyup="filterArchivedEvents()">
     <% if (archived.length === 0) { %>
       <p>No archived events.</p>
     <% } else { %>
-      <table>
-        <tr><th>Title</th><th>Date Watched</th><th>Actions</th></tr>
-        <% archived.forEach(e => { %>
-          <tr>
-            <td><%= e.title %><% if (e.release_date) { %> (<%= e.release_date.slice(0,4) %>)<% } %></td>
-            <td><%= e.date %></td>
-            <td>
-              <form action="/delete-archived/<%= e.id %>" method="post" style="display:inline" onsubmit="return confirm('Delete this archived event?');">
-                <button type="submit">Delete</button>
-              </form>
-            </td>
-          </tr>
-        <% }) %>
-      </table>
+      <% // Group archived events by year %>
+      <% const archivedByYear = {}; archived.forEach(e => { const y = new Date(e.date).getFullYear(); if (!archivedByYear[y]) archivedByYear[y] = []; archivedByYear[y].push(e); }); %>
+      <% Object.keys(archivedByYear).sort((a,b) => b-a).forEach(year => { %>
+        <div class="archived-year-group">
+          <button class="collapsible" onclick="toggleYear('<%= year %>')" style="width:100%;text-align:left;padding:0.5em;font-size:1em;font-weight:bold;">▶ <%= year %> (<%= archivedByYear[year].length %>)</button>
+          <div id="archived-<%= year %>" class="archived-content" style="display:none;">
+            <table style="margin-bottom:1em;">
+              <tr><th>Title</th><th>Date Watched</th><th>Actions</th></tr>
+              <% archivedByYear[year].forEach(e => { %>
+                <tr class="archived-row">
+                  <td><%= e.title %><% if (e.release_date) { %> (<%= e.release_date.slice(0,4) %>)<% } %></td>
+                  <td><%= e.date %></td>
+                  <td>
+                    <form action="/delete-archived/<%= e.id %>" method="post" style="display:inline" onsubmit="return confirm('Delete this archived event?');">
+                      <button type="submit">Delete</button>
+                    </form>
+                  </td>
+                </tr>
+              <% }) %>
+            </table>
+          </div>
+        </div>
+      <% }) %>
     <% } %>
+    <script>
+      function toggleYear(year) {
+        var content = document.getElementById('archived-' + year);
+        var btn = content.previousElementSibling;
+        if (content.style.display === 'none') {
+          content.style.display = '';
+          btn.innerHTML = '▼ ' + year + ' (' + content.querySelectorAll('.archived-row').length + ')';
+        } else {
+          content.style.display = 'none';
+          btn.innerHTML = '▶ ' + year + ' (' + content.querySelectorAll('.archived-row').length + ')';
+        }
+      }
+      function filterArchivedEvents() {
+        var input = document.getElementById('archivedSearch').value.toLowerCase();
+        var yearGroups = document.querySelectorAll('.archived-year-group');
+        yearGroups.forEach(function(group) {
+          var rows = group.querySelectorAll('.archived-row');
+          var anyVisible = false;
+          rows.forEach(function(row) {
+            var title = row.children[0].textContent.toLowerCase();
+            if (title.indexOf(input) > -1) {
+              row.style.display = '';
+              anyVisible = true;
+            } else {
+              row.style.display = 'none';
+            }
+          });
+          // Show year group if any row matches, else hide
+          group.style.display = anyVisible ? '' : 'none';
+        });
+      }
+    </script>
   </div>
   <div class="section">
     <h2>RSVP List</h2>
