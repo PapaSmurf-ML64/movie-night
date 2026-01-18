@@ -403,7 +403,7 @@ function registerHandlers(client, config, DEFAULT_VOICE_CHANNEL_ID, DEFAULT_EVEN
             } else {
               const selectId = `select_movie_${interaction.id}_${this.pendingTitleIdx}`;
               const options = results.slice(0, 25).map((m, i) => ({
-                label: `${m.title} (${m.release_date ? m.release_date.slice(0,4) : 'N/A'})`,
+                label: `${m.title} (${m.release_date ? m.release_date.slice(0,4) : 'N/A'})`.slice(0, 97) + (m.title.length > 93 ? '…' : ''),
                 value: String(i)
               }));
               pendingSelections.set(`${interaction.user.id}_${selectId}`, {

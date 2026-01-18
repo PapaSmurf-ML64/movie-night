@@ -172,16 +172,22 @@ async function autoStartScheduledEvents() {
   const guildId = process.env.ADMIN_GUILD_ID;
   const voiceChannelId = process.env.DEFAULT_VOICE_CHANNEL_ID;
   const upcoming = await schedule.getUpcomingSchedule(guildId);
+  // Track which event dates have already had their ping sent this run
+  global._pingedEventDates = global._pingedEventDates || new Set();
   for (const event of upcoming) {
     if (!event.date) continue;
-    // Use automatic DST handling for America/New_York
-    // event.date is YYYY-MM-DD
+    // Use Luxon for DST-correct 8PM Eastern
     const eventDateEastern = DateTime.fromISO(event.date + 'T20:00:00', { zone: 'America/New_York' });
     const eventDateUTC = eventDateEastern.toUTC();
-    // Send ping 5 minutes before event, only once
+    // Send ping 5 minutes before event, only once per date
     const pingTime = eventDateUTC.minus({ minutes: 5 });
     global._pingedEvents = global._pingedEvents || new Set();
-    if (DateTime.utc() >= pingTime && DateTime.utc() < eventDateUTC && !global._pingedEvents.has(event.id)) {
+    if (
+      DateTime.utc() >= pingTime &&
+      DateTime.utc() < eventDateUTC &&
+      !global._pingedEvents.has(event.id) &&
+      !global._pingedEventDates.has(event.date)
+    ) {
       try {
         const guild = await client.guilds.fetch(guildId);
         let channel = guild.channels.cache.get(config.scheduleChannelId);
@@ -197,13 +203,12 @@ async function autoStartScheduledEvents() {
           setTimeout(() => { sentMsg.delete().catch(() => {}); }, 60 * 60 * 1000);
         } else {
           const header = `${roleMention} Movie night is starting in 5 minutes and on the schedule for tonight is:`;
-          let first = true;
+          const embeds = [];
           for (const movie of movies) {
-            let embed = null;
             if (movie && movie.tmdb_id) {
               try {
                 const tmdbData = await tmdb.getMovieDetails(movie.tmdb_id);
-                embed = {
+                embeds.push({
                   color: 0xFFD700,
                   title: `${tmdbData.title} (${tmdbData.release_date ? tmdbData.release_date.slice(0,4) : ''})`,
                   description: tmdbData.overview || '',
@@ -211,24 +216,19 @@ async function autoStartScheduledEvents() {
                     { name: 'Genres', value: tmdbData.genres && tmdbData.genres.length ? tmdbData.genres.map(g => g.name).join(', ') : 'N/A', inline: true },
                     { name: 'User Rating', value: tmdbData.vote_average ? `${tmdbData.vote_average}/10` : 'N/A', inline: true }
                   ]
-                };
+                });
               } catch {}
             }
-            if (first) {
-              sentMsg = await channel.send({ content: header, embeds: embed ? [embed] : [] });
-              setTimeout(() => { sentMsg.delete().catch(() => {}); }, 60 * 60 * 1000);
-              first = false;
-            } else if (embed) {
-              sentMsg = await channel.send({ embeds: [embed] });
-              setTimeout(() => { sentMsg.delete().catch(() => {}); }, 60 * 60 * 1000);
-            }
           }
+          sentMsg = await channel.send({ content: header, embeds });
+          setTimeout(() => { sentMsg.delete().catch(() => {}); }, 60 * 60 * 1000);
         }
-        logBot(`Sent 5-min pre-event ping for event ${event.title} (${event.id}) in channel ${config.scheduleChannelId}`);
+        logBot(`Sent 5-min pre-event ping for event date ${event.date} in channel ${config.scheduleChannelId}`);
       } catch (e) {
         logBot(`Failed to send 5-min pre-event ping for event ${event.id}: ${e.message}`);
       }
       global._pingedEvents.add(event.id);
+      global._pingedEventDates.add(event.date);
     }
     // Join voice channel exactly at event start, only once
     global._startedEvents = global._startedEvents || new Set();
