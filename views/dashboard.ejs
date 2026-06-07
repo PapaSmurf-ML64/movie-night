@@ -1,186 +1,834 @@
 <!DOCTYPE html>
 <html>
 <head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Movie Night Dashboard</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@400;500;600;700;800&family=Space+Mono:wght@400;700&display=swap" rel="stylesheet">
   <style>
-    body { font-family: sans-serif; margin: 2em; }
-    h1 { color: #333; }
-    .section { margin-bottom: 2em; }
-    table { border-collapse: collapse; width: 100%; }
-    th, td { border: 1px solid #ccc; padding: 0.5em; }
-    th { background: #eee; }
+    :root {
+      --bg: #2a0611;
+      --bg-soft: #431024;
+      --panel: rgba(255, 248, 239, 0.96);
+      --text: #2a1712;
+      --muted: #6d5850;
+      --accent: #f8be57;
+      --accent-deep: #d58b23;
+      --danger: #a3262e;
+      --border: #e1c7af;
+      --chip: #fff1de;
+      --shadow: 0 20px 60px rgba(0, 0, 0, 0.38);
+      --radius: 16px;
+    }
+
+    body.dark-theme {
+      --bg: #030a16;
+      --bg-soft: #0a1730;
+      --panel: rgba(10, 19, 36, 0.94);
+      --text: #d4e5ff;
+      --muted: #95aed2;
+      --accent: #69a8ff;
+      --accent-deep: #3f7edf;
+      --danger: #ff6d83;
+      --border: #243f66;
+      --chip: #10223f;
+      --shadow: 0 20px 60px rgba(0, 0, 0, 0.56);
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      padding: 2rem 1.25rem 3rem;
+      color: var(--text);
+      font-family: 'Outfit', sans-serif;
+      background:
+        radial-gradient(circle at 10% 10%, rgba(248, 190, 87, 0.22), transparent 45%),
+        radial-gradient(circle at 85% 16%, rgba(255, 99, 132, 0.18), transparent 42%),
+        linear-gradient(135deg, #290611, #3b0d1f 56%, #4a1327);
+      min-height: 100vh;
+      transition: background 200ms ease, color 200ms ease;
+    }
+
+    body.dark-theme {
+      background:
+        radial-gradient(circle at 10% 10%, rgba(105, 168, 255, 0.16), transparent 45%),
+        radial-gradient(circle at 85% 16%, rgba(63, 126, 223, 0.14), transparent 42%),
+        linear-gradient(135deg, #040b18, #091428 56%, #0d1f3c);
+    }
+
+    body::before {
+      content: '';
+      position: fixed;
+      inset: 0;
+      pointer-events: none;
+      opacity: 0.12;
+      background-image: linear-gradient(to right, rgba(255, 255, 255, 0.4) 1px, transparent 1px), linear-gradient(to bottom, rgba(255, 255, 255, 0.4) 1px, transparent 1px);
+      background-size: 24px 24px;
+      mix-blend-mode: soft-light;
+    }
+
+    .container {
+      width: 100%;
+      max-width: none;
+      margin: 0 auto;
+      position: relative;
+      z-index: 1;
+    }
+
+    .hero {
+      margin-bottom: 1.35rem;
+      color: #fff6eb;
+      animation: fadeSlide 540ms ease both;
+      border: 1px solid rgba(255, 236, 208, 0.5);
+      background: linear-gradient(180deg, rgba(88, 18, 39, 0.72), rgba(47, 10, 24, 0.82));
+      border-radius: 18px;
+      padding: 1rem 1rem 1.15rem;
+      box-shadow: 0 16px 40px rgba(0, 0, 0, 0.4);
+      position: relative;
+      overflow: hidden;
+    }
+
+    body.dark-theme .hero {
+      color: #d4e5ff;
+      border: 1px solid rgba(124, 168, 230, 0.45);
+      background: linear-gradient(180deg, rgba(10, 22, 46, 0.78), rgba(7, 16, 34, 0.86));
+    }
+
+    .hero-top {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 1rem;
+      position: relative;
+      z-index: 1;
+      flex-wrap: wrap;
+    }
+
+    .hero-copy {
+      flex: 1 1 340px;
+      min-width: 260px;
+    }
+
+    .hero-controls {
+      flex: 0 1 360px;
+      min-width: 240px;
+      background: rgba(255, 245, 229, 0.12);
+      border: 1px solid rgba(255, 223, 173, 0.35);
+      border-radius: 12px;
+      padding: 0.65rem;
+      backdrop-filter: blur(2px);
+    }
+
+    body.dark-theme .hero-controls {
+      background: rgba(17, 34, 61, 0.36);
+      border-color: rgba(124, 168, 230, 0.42);
+    }
+
+    .hero::after {
+      content: '';
+      position: absolute;
+      left: -1rem;
+      right: -1rem;
+      top: 0.45rem;
+      height: 8px;
+      border-radius: 999px;
+      background-image: radial-gradient(circle, #ffd86f 35%, rgba(255, 216, 111, 0) 38%);
+      background-size: 22px 8px;
+      opacity: 0.8;
+    }
+
+    .hero h1 {
+      margin: 0;
+      font-size: clamp(1.8rem, 2.8vw, 2.8rem);
+      letter-spacing: 0.03em;
+      font-weight: 800;
+      text-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
+      text-transform: uppercase;
+    }
+
+    .hero p {
+      margin: 0.35rem 0 0;
+      color: rgba(255, 246, 235, 0.84);
+      font-size: 0.98rem;
+      letter-spacing: 0.01em;
+    }
+
+    body.dark-theme .hero p {
+      color: rgba(212, 229, 255, 0.86);
+    }
+
+    .hero-controls label {
+      color: #f6e7d3;
+      margin-bottom: 0.3rem;
+    }
+
+    body.dark-theme .hero-controls label {
+      color: #d4e5ff;
+    }
+
+    .hero-controls select {
+      background: #fffdf9;
+    }
+
+    body.dark-theme .hero-controls select {
+      background: #0c1d3b;
+      color: #d4e5ff;
+      border-color: #345a8d;
+    }
+
+    .hero-actions {
+      margin-top: 0.55rem;
+      display: flex;
+      justify-content: flex-end;
+      gap: 0.5rem;
+      flex-wrap: wrap;
+    }
+
+    .toggle-btn {
+      background: #ffe1a8;
+      border: 1px solid #f1c57c;
+      border-radius: 999px;
+      padding: 0.45rem 0.78rem;
+      font-size: 0.84rem;
+      font-weight: 700;
+      cursor: pointer;
+      color: #4a2d18;
+    }
+
+    .toggle-btn:hover {
+      background: #ffd48b;
+    }
+
+    body.dark-theme .toggle-btn {
+      background: #1a3562;
+      border-color: #3e6ca9;
+      color: #d4e5ff;
+    }
+
+    body.dark-theme .toggle-btn:hover {
+      background: #244378;
+    }
+
+    .theme-btn {
+      background: #f6ebd6;
+      border: 1px solid #dfc28d;
+      border-radius: 999px;
+      padding: 0.45rem 0.78rem;
+      font-size: 0.84rem;
+      font-weight: 700;
+      cursor: pointer;
+      color: #4a2d18;
+    }
+
+    .theme-btn:hover {
+      background: #eed9b0;
+    }
+
+    body.dark-theme .theme-btn {
+      background: #10284d;
+      border-color: #3b669f;
+      color: #d4e5ff;
+    }
+
+    body.dark-theme .theme-btn:hover {
+      background: #193661;
+    }
+
+    .commands-collapse {
+      margin-top: 0.8rem;
+      padding-top: 0.8rem;
+      border-top: 1px dashed rgba(255, 224, 182, 0.4);
+      position: relative;
+      z-index: 1;
+    }
+
+    .section {
+      margin-bottom: 1rem;
+      background: var(--panel);
+      border: 1px solid rgba(255, 255, 255, 0.5);
+      border-radius: var(--radius);
+      box-shadow: var(--shadow);
+      overflow: hidden;
+      animation: fadeSlide 620ms ease both;
+    }
+
+    body.dark-theme .section {
+      border-color: rgba(124, 168, 230, 0.3);
+    }
+
+    .section-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 1rem;
+      padding: 0.95rem 1rem;
+      background: linear-gradient(92deg, rgba(248, 190, 87, 0.27), rgba(255, 255, 255, 0.35));
+      border-bottom: 1px solid var(--border);
+    }
+
+    body.dark-theme .section-header {
+      background: linear-gradient(92deg, rgba(63, 126, 223, 0.18), rgba(15, 30, 55, 0.62));
+    }
+
+    .section h2 {
+      margin: 0;
+      font-size: 1.06rem;
+      font-weight: 700;
+      letter-spacing: 0.01em;
+    }
+
+    .section-body {
+      padding: 1rem;
+    }
+
+    .split {
+      display: grid;
+      grid-template-columns: 1fr;
+      gap: 1rem;
+    }
+
+    @media (min-width: 980px) {
+      .split {
+        grid-template-columns: 1fr 1fr;
+      }
+    }
+
+    label,
+    .hint {
+      font-size: 0.82rem;
+      color: var(--muted);
+      display: block;
+      margin-bottom: 0.45rem;
+      letter-spacing: 0.01em;
+    }
+
+    select,
+    input[type="text"] {
+      width: 100%;
+      border: 1px solid var(--border);
+      border-radius: 11px;
+      font-family: 'Outfit', sans-serif;
+      padding: 0.62rem 0.75rem;
+      font-size: 0.96rem;
+      background: #fff;
+      color: var(--text);
+      transition: border-color 120ms ease, box-shadow 120ms ease;
+    }
+
+    select:focus,
+    input[type="text"]:focus {
+      outline: none;
+      border-color: var(--accent-deep);
+      box-shadow: 0 0 0 3px rgba(216, 111, 45, 0.16);
+    }
+
+    .table-wrap {
+      overflow-x: auto;
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      background: #fff;
+    }
+
+    body.dark-theme .table-wrap {
+      background: #0c1a33;
+    }
+
+    table {
+      border-collapse: collapse;
+      width: 100%;
+      min-width: 640px;
+    }
+
+    th,
+    td {
+      border-bottom: 1px solid #ede2d4;
+      padding: 0.7rem 0.72rem;
+      text-align: left;
+      vertical-align: top;
+      font-size: 0.92rem;
+    }
+
+    th {
+      background: #fff6e4;
+      color: #4b4339;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.035em;
+      font-size: 0.73rem;
+    }
+
+    body.dark-theme th {
+      background: #112a4c;
+      color: #b8d5ff;
+    }
+
+    body.dark-theme td {
+      border-bottom-color: #1b355b;
+    }
+
+    tr:last-child td {
+      border-bottom: none;
+    }
+
+    .event-tag {
+      display: inline-block;
+      margin-left: 0.4rem;
+      font-size: 0.69rem;
+      letter-spacing: 0.03em;
+      text-transform: uppercase;
+      border: 1px solid #f2b0b0;
+      color: #9a3535;
+      padding: 0.14rem 0.4rem;
+      border-radius: 999px;
+      background: #fff1f1;
+    }
+
+    .btn,
+    .collapsible {
+      appearance: none;
+      border: 1px solid transparent;
+      border-radius: 999px;
+      padding: 0.42rem 0.72rem;
+      font-family: 'Outfit', sans-serif;
+      font-size: 0.82rem;
+      font-weight: 600;
+      cursor: pointer;
+      transition: transform 120ms ease, box-shadow 120ms ease, background 120ms ease;
+      text-decoration: none;
+      color: #1a1a1a;
+      background: #ffe1a8;
+    }
+
+    .btn:hover,
+    .collapsible:hover {
+      transform: translateY(-1px);
+      box-shadow: 0 5px 12px rgba(0, 0, 0, 0.18);
+    }
+
+    .btn:active,
+    .collapsible:active {
+      transform: translateY(0);
+    }
+
+    .btn-danger {
+      background: #ffe2e2;
+      border-color: #edb1b1;
+      color: #842525;
+    }
+
+    .btn-neutral {
+      background: #f8ebd5;
+      border-color: #e8d0a7;
+      color: #4e3b2a;
+    }
+
+    .action-form {
+      display: inline-flex;
+      margin-right: 0.36rem;
+      margin-bottom: 0.28rem;
+    }
+
+    .empty-state {
+      margin: 0;
+      padding: 0.65rem 0;
+      color: var(--muted);
+      font-size: 0.94rem;
+    }
+
+    .archived-year-group {
+      margin-bottom: 0.7rem;
+    }
+
+    .collapsible {
+      width: 100%;
+      text-align: left;
+      border-radius: 10px;
+      border: 1px solid var(--border);
+      background: #fff2da;
+      padding: 0.58rem 0.74rem;
+      font-size: 0.9rem;
+      color: #53463d;
+      margin-bottom: 0.45rem;
+    }
+
+    .archived-content {
+      margin-top: 0.2rem;
+    }
+
+    .chips {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.5rem;
+      list-style: none;
+      padding: 0;
+      margin: 0;
+    }
+
+    .chips li {
+      background: var(--chip);
+      border: 1px dashed #d9a659;
+      border-radius: 999px;
+      padding: 0.34rem 0.64rem;
+      font-size: 0.83rem;
+      color: #624a2f;
+      font-family: 'Space Mono', monospace;
+    }
+
+    body.dark-theme .chips li {
+      border-color: #3f6fa9;
+      color: #b8d5ff;
+    }
+
+    .muted {
+      color: var(--muted);
+    }
+
+    .commands-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(230px, 1fr));
+      gap: 0.7rem;
+    }
+
+    .command-card {
+      background: rgba(255, 250, 241, 0.96);
+      border: 1px solid #f0d7ae;
+      border-radius: 12px;
+      padding: 0.72rem 0.78rem;
+      box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.6);
+    }
+
+    body.dark-theme .command-card {
+      background: rgba(13, 28, 52, 0.96);
+      border-color: #305483;
+      box-shadow: inset 0 1px 0 rgba(174, 205, 255, 0.08);
+    }
+
+    .command-card h3 {
+      margin: 0 0 0.35rem;
+      font-size: 0.92rem;
+      font-family: 'Space Mono', monospace;
+      color: #4a3224;
+    }
+
+    body.dark-theme .command-card h3 {
+      color: #c1dcff;
+    }
+
+    .command-card p {
+      margin: 0;
+      font-size: 0.85rem;
+      color: #6a5548;
+      line-height: 1.35;
+    }
+
+    body.dark-theme .command-card p {
+      color: #9db8df;
+    }
+
+    @keyframes fadeSlide {
+      from {
+        opacity: 0;
+        transform: translateY(8px);
+      }
+      to {
+        opacity: 1;
+        transform: translateY(0);
+      }
+    }
   </style>
 </head>
 <body>
-  <h1>Movie Night Dashboard</h1>
-  <div class="section">
-    <h2>Upcoming Schedule</h2>
-    <% if (allDates && allDates.length > 0) { %>
-      <table>
-        <tr><th>Date</th><th>Title</th><th>Added By</th><th>Actions</th></tr>
-        <% function formatDate(dateStr) {
-          const date = new Date(dateStr + 'T20:00:00Z');
-          const months = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
-          const day = date.getUTCDate();
-          const year = date.getUTCFullYear();
-          const month = months[date.getUTCMonth()];
-          function ordinal(n) {
-            if (n > 3 && n < 21) return n + 'th';
-            switch (n % 10) {
-              case 1: return n + 'st';
-              case 2: return n + 'nd';
-              case 3: return n + 'rd';
-              default: return n + 'th';
-            }
-          }
-          return `${month} ${ordinal(day)}, ${year}`;
-        } %>
-        <% allDates.forEach(dateStr => { %>
-          <% const moviesForDate = dashboardByDate[dateStr] || []; %>
-          <% const isSaturday = new Date(dateStr).getDay() === 6; %>
-          <tr>
-            <td><%= formatDate(dateStr) %> <% if (!isSaturday) { %><span style="color:#b00;font-weight:bold;">(Special Event)</span><% } %></td>
-            <td>
-              <% if (moviesForDate.length === 0) { %>
-                &lt;empty&gt;
-              <% } else { %>
-                <% moviesForDate.forEach((m, idx) => { %>
-                  <%= m.title %><% if (m.release_date) { %> (<%= m.release_date.slice(0,4) %>)<% } %><%= idx < moviesForDate.length - 1 ? ', ' : '' %>
-                <% }) %>
-              <% } %>
-            </td>
-            <td>
-              <% if (moviesForDate.length === 0) { %>
-                &ndash;
-              <% } else { %>
-                <% const addedById = moviesForDate[0].added_by ? moviesForDate[0].added_by.split(',')[0] : '';
-                   const addedByName = userMap && userMap[addedById] ? userMap[addedById] : addedById; %>
-                <%= addedByName %>
-              <% } %>
-            </td>
-            <td>
-              <% if (moviesForDate.length === 0) { %>
-                &ndash;
-              <% } else { %>
-                <% const m = moviesForDate[0];
-                   const eventId = upcoming.find(u => u.date === m.date && u.title === m.title)?.id; %>
-                <% if (m.title !== '<empty>' && eventId) { %>
-                  <form action="/archive/<%= eventId %>" method="post" style="display:inline" onsubmit="return confirm('Archive this event?');">
-                    <button type="submit">Archive</button>
-                  </form>
-                  <form action="/delete-archived/<%= eventId %>" method="post" style="display:inline" onsubmit="return confirm('Delete this event?');">
-                    <button type="submit">Delete</button>
-                  </form>
-                <% } else { %>
-                  &ndash;
-                <% } %>
-              <% } %>
-            </td>
-          </tr>
-        <% }) %>
-      </table>
-    <% } else { %>
-      <p>No movies scheduled.</p>
-    <% } %>
-  </div>
-  <div class="section">
-    <h2>Archived Events</h2>
-    <input type="text" id="archivedSearch" placeholder="Search archived events..." style="margin-bottom:10px;width:100%;padding:0.5em;" onkeyup="filterArchivedEvents()">
-    <% if (archived.length === 0) { %>
-      <p>No archived events.</p>
-    <% } else { %>
-      <% // Group archived events by year %>
-      <% const archivedByYear = {}; archived.forEach(e => { const y = new Date(e.date).getFullYear(); if (!archivedByYear[y]) archivedByYear[y] = []; archivedByYear[y].push(e); }); %>
-      <% Object.keys(archivedByYear).sort((a,b) => b-a).forEach(year => { %>
-        <div class="archived-year-group">
-          <button class="collapsible" onclick="toggleYear('<%= year %>')" style="width:100%;text-align:left;padding:0.5em;font-size:1em;font-weight:bold;">▶ <%= year %> (<%= archivedByYear[year].length %>)</button>
-          <div id="archived-<%= year %>" class="archived-content" style="display:none;">
-            <table style="margin-bottom:1em;">
-              <tr><th>Title</th><th>Date Watched</th><th>Actions</th></tr>
-              <% archivedByYear[year].forEach(e => { %>
-                <tr class="archived-row">
-                  <td><%= e.title %><% if (e.release_date) { %> (<%= e.release_date.slice(0,4) %>)<% } %></td>
-                  <td><%= e.date %></td>
+  <div class="container">
+    <header class="hero">
+      <div class="hero-top">
+        <div class="hero-copy">
+          <h1>Movie Night Dashboard</h1>
+          <p>Now showing: your server schedule, archives, and attendance in one box-office view.</p>
+        </div>
+        <div class="hero-controls">
+          <form method="get" action="/">
+            <label for="guild_id">Active server</label>
+            <select id="guild_id" name="guild_id" onchange="this.form.submit()">
+              <% (guilds || []).forEach(g => { %>
+                <option value="<%= g.id %>" <%= selectedGuildId === g.id ? 'selected' : '' %>><%= g.name %></option>
+              <% }) %>
+            </select>
+          </form>
+          <div class="hero-actions">
+            <button class="theme-btn" id="themeToggleBtn" type="button" aria-pressed="false">Dark Mode</button>
+            <button class="toggle-btn" id="toggleCommandsBtn" type="button" aria-expanded="false" aria-controls="commandsCollapse">Show Bot Commands</button>
+          </div>
+        </div>
+      </div>
+      <div class="commands-collapse" id="commandsCollapse" style="display:none;">
+        <% if (botCommands && botCommands.length > 0) { %>
+          <div class="commands-grid">
+            <% botCommands.forEach(cmd => { %>
+              <article class="command-card">
+                <h3><%= cmd.name %></h3>
+                <p><%= cmd.description %></p>
+              </article>
+            <% }) %>
+          </div>
+        <% } else { %>
+          <p class="empty-state">No command metadata available.</p>
+        <% } %>
+      </div>
+    </header>
+
+    <section class="section">
+      <div class="section-header">
+        <h2>Upcoming Schedule</h2>
+      </div>
+      <div class="section-body">
+        <% if (allDates && allDates.length > 0) { %>
+          <div class="table-wrap">
+            <table>
+              <tr><th>Date</th><th>Title</th><th>Added By</th><th>Actions</th></tr>
+              <% function formatDate(dateStr) {
+                const date = new Date(dateStr + 'T20:00:00Z');
+                const months = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
+                const day = date.getUTCDate();
+                const year = date.getUTCFullYear();
+                const month = months[date.getUTCMonth()];
+                function ordinal(n) {
+                  if (n > 3 && n < 21) return n + 'th';
+                  switch (n % 10) {
+                    case 1: return n + 'st';
+                    case 2: return n + 'nd';
+                    case 3: return n + 'rd';
+                    default: return n + 'th';
+                  }
+                }
+                return `${month} ${ordinal(day)}, ${year}`;
+              } %>
+              <% allDates.forEach(dateStr => { %>
+                <% const moviesForDate = dashboardByDate[dateStr] || []; %>
+                <% const isSaturday = new Date(dateStr).getDay() === 6; %>
+                <tr>
                   <td>
-                    <form action="/delete-archived/<%= e.id %>" method="post" style="display:inline" onsubmit="return confirm('Delete this archived event?');">
-                      <button type="submit">Delete</button>
-                    </form>
+                    <%= formatDate(dateStr) %>
+                    <% if (!isSaturday) { %><span class="event-tag">Special Event</span><% } %>
+                  </td>
+                  <td>
+                    <% if (moviesForDate.length === 0) { %>
+                      <span class="muted">&lt;empty&gt;</span>
+                    <% } else { %>
+                      <% moviesForDate.forEach((m, idx) => { %>
+                        <%= m.title %><% if (m.release_date) { %> (<%= m.release_date.slice(0,4) %>)<% } %><%= idx < moviesForDate.length - 1 ? ', ' : '' %>
+                      <% }) %>
+                    <% } %>
+                  </td>
+                  <td>
+                    <% if (moviesForDate.length === 0) { %>
+                      <span class="muted">&ndash;</span>
+                    <% } else { %>
+                      <% const addedById = moviesForDate[0].added_by ? moviesForDate[0].added_by.split(',')[0] : '';
+                         const addedByName = userMap && userMap[addedById] ? userMap[addedById] : addedById; %>
+                      <%= addedByName %>
+                    <% } %>
+                  </td>
+                  <td>
+                    <% if (moviesForDate.length === 0) { %>
+                      <span class="muted">&ndash;</span>
+                    <% } else { %>
+                      <% const m = moviesForDate[0];
+                         const eventId = upcoming.find(u => u.date === m.date && u.title === m.title)?.id; %>
+                      <% if (m.title !== '<empty>' && eventId) { %>
+                        <form class="action-form" action="/archive/<%= eventId %>" method="post" onsubmit="return confirm('Archive this event?');">
+                          <input type="hidden" name="guild_id" value="<%= selectedGuildId %>">
+                          <button class="btn btn-neutral" type="submit">Archive</button>
+                        </form>
+                        <form class="action-form" action="/delete-archived/<%= eventId %>" method="post" onsubmit="return confirm('Delete this event?');">
+                          <input type="hidden" name="guild_id" value="<%= selectedGuildId %>">
+                          <button class="btn btn-danger" type="submit">Delete</button>
+                        </form>
+                      <% } else { %>
+                        <span class="muted">&ndash;</span>
+                      <% } %>
+                    <% } %>
                   </td>
                 </tr>
               <% }) %>
             </table>
           </div>
+        <% } else { %>
+          <p class="empty-state">No movies scheduled.</p>
+        <% } %>
+      </div>
+    </section>
+
+    <section class="section">
+      <div class="section-header">
+        <h2>Archived Events</h2>
+      </div>
+      <div class="section-body">
+        <label for="archivedSearch">Filter archived titles</label>
+        <input type="text" id="archivedSearch" placeholder="Search archived events..." onkeyup="filterArchivedEvents()">
+        <% if (archived.length === 0) { %>
+          <p class="empty-state">No archived events.</p>
+        <% } else { %>
+          <% // Group archived events by year %>
+          <% const archivedByYear = {}; archived.forEach(e => { const y = new Date(e.date).getFullYear(); if (!archivedByYear[y]) archivedByYear[y] = []; archivedByYear[y].push(e); }); %>
+          <% Object.keys(archivedByYear).sort((a,b) => b-a).forEach(year => { %>
+            <div class="archived-year-group">
+              <button class="collapsible" onclick="toggleYear('<%= year %>')" data-year="<%= year %>">▶ <%= year %> (<%= archivedByYear[year].length %>)</button>
+              <div id="archived-<%= year %>" class="archived-content" style="display:none;">
+                <div class="table-wrap">
+                  <table>
+                    <tr><th>Title</th><th>Date Watched</th><th>Actions</th></tr>
+                    <% archivedByYear[year].forEach(e => { %>
+                      <tr class="archived-row">
+                        <td><%= e.title %><% if (e.release_date) { %> (<%= e.release_date.slice(0,4) %>)<% } %></td>
+                        <td><%= e.date %></td>
+                        <td>
+                          <form class="action-form" action="/delete-archived/<%= e.id %>" method="post" onsubmit="return confirm('Delete this archived event?');">
+                            <input type="hidden" name="guild_id" value="<%= selectedGuildId %>">
+                            <button class="btn btn-danger" type="submit">Delete</button>
+                          </form>
+                        </td>
+                      </tr>
+                    <% }) %>
+                  </table>
+                </div>
+              </div>
+            </div>
+          <% }) %>
+        <% } %>
+      </div>
+    </section>
+
+    <div class="split">
+      <section class="section">
+        <div class="section-header">
+          <h2>RSVP List</h2>
         </div>
-      <% }) %>
-    <% } %>
-    <script>
-      function toggleYear(year) {
-        var content = document.getElementById('archived-' + year);
-        var btn = content.previousElementSibling;
-        if (content.style.display === 'none') {
-          content.style.display = '';
-          btn.innerHTML = '▼ ' + year + ' (' + content.querySelectorAll('.archived-row').length + ')';
-        } else {
-          content.style.display = 'none';
-          btn.innerHTML = '▶ ' + year + ' (' + content.querySelectorAll('.archived-row').length + ')';
+        <div class="section-body">
+          <% if (rsvps.length === 0) { %>
+            <p class="empty-state">No one has RSVP'd yet.</p>
+          <% } else { %>
+            <ul class="chips">
+              <% rsvps.forEach(u => { %>
+                <li>
+                  <% if (userMap && userMap[u]) { %>
+                    <%= userMap[u] %> (<%= u %>)
+                  <% } else { %>
+                    <%= u %>
+                  <% } %>
+                </li>
+              <% }) %>
+            </ul>
+          <% } %>
+        </div>
+      </section>
+
+      <section class="section">
+        <div class="section-header">
+          <h2>Attendance List</h2>
+        </div>
+        <div class="section-body">
+          <% if (attendance.length === 0) { %>
+            <p class="empty-state">No attendees yet.</p>
+          <% } else { %>
+            <ul class="chips">
+              <% attendance.forEach(u => { %>
+                <li>
+                  <% if (userMap && userMap[u]) { %>
+                    <%= userMap[u] %> (<%= u %>)
+                  <% } else { %>
+                    <%= u %>
+                  <% } %>
+                </li>
+              <% }) %>
+            </ul>
+          <% } %>
+        </div>
+      </section>
+    </div>
+  </div>
+
+  <script>
+    function toggleYear(year) {
+      var content = document.getElementById('archived-' + year);
+      var btn = document.querySelector('button[data-year="' + year + '"]');
+      if (!content || !btn) return;
+      if (content.style.display === 'none') {
+        content.style.display = '';
+        btn.textContent = '▼ ' + year + ' (' + content.querySelectorAll('.archived-row').length + ')';
+      } else {
+        content.style.display = 'none';
+        btn.textContent = '▶ ' + year + ' (' + content.querySelectorAll('.archived-row').length + ')';
+      }
+    }
+
+    function filterArchivedEvents() {
+      var input = document.getElementById('archivedSearch').value.toLowerCase();
+      var yearGroups = document.querySelectorAll('.archived-year-group');
+      yearGroups.forEach(function(group) {
+        var rows = group.querySelectorAll('.archived-row');
+        var anyVisible = false;
+        rows.forEach(function(row) {
+          var title = row.children[0].textContent.toLowerCase();
+          if (title.indexOf(input) > -1) {
+            row.style.display = '';
+            anyVisible = true;
+          } else {
+            row.style.display = 'none';
+          }
+        });
+        group.style.display = anyVisible ? '' : 'none';
+      });
+    }
+
+    function toggleCommands() {
+      var panel = document.getElementById('commandsCollapse');
+      var button = document.getElementById('toggleCommandsBtn');
+      if (!panel || !button) return;
+      var isHidden = panel.style.display === 'none';
+      panel.style.display = isHidden ? '' : 'none';
+      button.textContent = isHidden ? 'Hide Bot Commands' : 'Show Bot Commands';
+      button.setAttribute('aria-expanded', isHidden ? 'true' : 'false');
+    }
+
+    (function initCommandsToggle() {
+      var button = document.getElementById('toggleCommandsBtn');
+      if (!button) return;
+      button.addEventListener('click', toggleCommands);
+    })();
+
+    function setTheme(isDark) {
+      var button = document.getElementById('themeToggleBtn');
+      if (isDark) {
+        document.body.classList.add('dark-theme');
+        if (button) {
+          button.textContent = 'Light Mode';
+          button.setAttribute('aria-pressed', 'true');
+        }
+      } else {
+        document.body.classList.remove('dark-theme');
+        if (button) {
+          button.textContent = 'Dark Mode';
+          button.setAttribute('aria-pressed', 'false');
         }
       }
-      function filterArchivedEvents() {
-        var input = document.getElementById('archivedSearch').value.toLowerCase();
-        var yearGroups = document.querySelectorAll('.archived-year-group');
-        yearGroups.forEach(function(group) {
-          var rows = group.querySelectorAll('.archived-row');
-          var anyVisible = false;
-          rows.forEach(function(row) {
-            var title = row.children[0].textContent.toLowerCase();
-            if (title.indexOf(input) > -1) {
-              row.style.display = '';
-              anyVisible = true;
-            } else {
-              row.style.display = 'none';
-            }
-          });
-          // Show year group if any row matches, else hide
-          group.style.display = anyVisible ? '' : 'none';
-        });
-      }
-    </script>
-  </div>
-  <div class="section">
-    <h2>RSVP List</h2>
-    <% if (rsvps.length === 0) { %>
-      <p>No one has RSVP'd yet.</p>
-    <% } else { %>
-      <ul>
-        <% rsvps.forEach(u => { %>
-          <li>
-            <% if (userMap && userMap[u]) { %>
-              <%= userMap[u] %> (<%= u %>)
-            <% } else { %>
-              <%= u %>
-            <% } %>
-          </li>
-        <% }) %>
-      </ul>
-    <% } %>
-  </div>
-  <div class="section">
-    <h2>Attendance List</h2>
-    <% if (attendance.length === 0) { %>
-      <p>No attendees yet.</p>
-    <% } else { %>
-      <ul>
-        <% attendance.forEach(u => { %>
-          <li>
-            <% if (userMap && userMap[u]) { %>
-              <%= userMap[u] %> (<%= u %>)
-            <% } else { %>
-              <%= u %>
-            <% } %>
-          </li>
-        <% }) %>
-      </ul>
-    <% } %>
-  </div>
+    }
+
+    (function initThemeToggle() {
+      var button = document.getElementById('themeToggleBtn');
+      var saved = localStorage.getItem('movieNightTheme');
+      setTheme(saved === 'dark');
+      if (!button) return;
+      button.addEventListener('click', function() {
+        var nextIsDark = !document.body.classList.contains('dark-theme');
+        setTheme(nextIsDark);
+        localStorage.setItem('movieNightTheme', nextIsDark ? 'dark' : 'light');
+      });
+    })();
+  </script>
 </body>
 </html>
