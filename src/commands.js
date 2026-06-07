@@ -1,11 +1,10 @@
 // All slash command and interaction handlers
 const schedule = require('./schedule');
 const tmdb = require('./tmdb');
-const media = require('./media');
 const { postOrUpdateSchedule, saveScheduleMessageId } = require('./scheduleEmbed');
-const { joinConfiguredVoiceChannel } = require('./voice');
 const { autoDelete } = require('./util');
 const { logBot } = require('./logger');
+const { getGuildConfig, setGuildConfig } = require('./guildConfig');
 
 // At the top, add a map to track pending movie selections
 const pendingSelections = new Map();
@@ -13,15 +12,51 @@ const pendingSelections = new Map();
 const pendingAddMovieSessions = new Map();
 
 // Export a function to register all handlers
-function registerHandlers(client, config, DEFAULT_VOICE_CHANNEL_ID, DEFAULT_EVENT_TIME) {
+function registerHandlers(client) {
+  async function getOrCreateMoviegoersRole(guild) {
+    let role = guild.roles.cache.find(r => r.name === 'Moviegoers');
+    if (role) return role;
+
+    await guild.roles.fetch();
+    role = guild.roles.cache.find(r => r.name === 'Moviegoers');
+    if (role) return role;
+
+    try {
+      role = await guild.roles.create({
+        name: 'Moviegoers',
+        mentionable: true,
+        reason: 'Auto-created for Movie Night RSVP notifications',
+      });
+      logBot(`Created Moviegoers role in guild ${guild.id}`);
+      return role;
+    } catch (err) {
+      logBot(`Failed to create Moviegoers role in guild ${guild.id}: ${err.message}`);
+      return null;
+    }
+  }
+
+  function isGuildAdmin(member, guild_id) {
+    const guildConfig = getGuildConfig(guild_id);
+    const adminRoleId = guildConfig.adminRoleId;
+    const hasConfiguredRole = adminRoleId && member?.roles?.cache?.has(adminRoleId);
+    const hasAdminPermission = member?.permissions?.has('Administrator');
+    return Boolean(hasConfiguredRole || hasAdminPermission);
+  }
+
+  async function resolveScheduleChannel(guild, fallbackChannel) {
+    const guildConfig = getGuildConfig(guild.id);
+    if (!guildConfig.scheduleChannelId) return fallbackChannel;
+    try {
+      return await guild.channels.fetch(guildConfig.scheduleChannelId);
+    } catch {
+      return fallbackChannel;
+    }
+  }
+
   // Helper: send the Movie Night ping message (used by both scheduleRolePing and !testping)
   async function sendMovieNightPing(channel, role, movies, source = '') {
     // Always use the Moviegoers role for pings
-    let moviegoersRole = channel.guild.roles.cache.find(r => r.name === 'Moviegoers');
-    if (!moviegoersRole) {
-      await channel.guild.roles.fetch();
-      moviegoersRole = channel.guild.roles.cache.find(r => r.name === 'Moviegoers');
-    }
+    const moviegoersRole = await getOrCreateMoviegoersRole(channel.guild);
     const roleMention = moviegoersRole ? `<@&${moviegoersRole.id}>` : '@everyone';
     if (!Array.isArray(movies)) movies = movies ? [movies] : [];
     if (movies.length === 0) {
@@ -60,37 +95,11 @@ function registerHandlers(client, config, DEFAULT_VOICE_CHANNEL_ID, DEFAULT_EVEN
     }
   }
 
-  // Helper: auto-delete a message after 5 minutes (unless it's the schedule message)
-  // (autoDelete is imported)
-
-  // Ping Movie Night role 5 minutes before the event
-  async function scheduleRolePing() {
-    if (global._testPingActive) return; // Prevent scheduled ping if test is active
-    const guild = client.guilds.cache.get(process.env.ADMIN_GUILD_ID);
-    if (!guild) return;
-    let role = guild.roles.cache.find(r => r.name === 'Movie Night');
-    if (!role) return;
-    let channel = guild.channels.cache.get(config.scheduleChannelId);
-    if (!channel) channel = await guild.channels.fetch(config.scheduleChannelId);
-    // Find the next event time (next Saturday 8PM EST)
-    const now = new Date();
-    let nextSaturday = new Date(now);
-    nextSaturday.setDate(now.getDate() + ((6 - now.getDay() + 7) % 7));
-    nextSaturday.setHours(20, 0, 0, 0); // 8PM
-    // Fetch all scheduled movies for that date (double feature support)
-    const movies = (await schedule.getUpcomingSchedule(guild.id)).filter(m => m.date === nextSaturday.toISOString().slice(0, 10));
-    // ...existing code...
-  }
-
-  client.once('ready', async () => {
-    scheduleRolePing();
-  });
-
   client.on('messageCreate', async message => {
     if (message.author.bot) return;
     if (message.content.trim().toLowerCase() === '!testping') {
-      const adminRoleId = process.env.ADMIN_ROLE_ID;
-      const isAdmin = message.member.roles && (message.member.roles.cache.has(adminRoleId) || message.member.permissions.has('Administrator'));
+      const guildId = message.guild?.id;
+      const isAdmin = isGuildAdmin(message.member, guildId);
       if (!isAdmin) {
         const replyMsg = await message.reply('Only administrators can use this command.');
         autoDelete(replyMsg);
@@ -156,24 +165,14 @@ function registerHandlers(client, config, DEFAULT_VOICE_CHANNEL_ID, DEFAULT_EVEN
     if (!interaction.isChatInputCommand()) return;
     const { commandName } = interaction;
     const guild_id = interaction.guild?.id;
-    const adminRoleId = process.env.ADMIN_ROLE_ID;
-    const isAdmin = interaction.member.roles && (interaction.member.roles.cache.has(adminRoleId) || interaction.member.permissions.has('Administrator'));
+    const isAdmin = isGuildAdmin(interaction.member, guild_id);
     if (commandName === 'refreshschedule') {
       if (!isAdmin) {
         const replyMsg = await interaction.reply('Only administrators can refresh the schedule.');
         autoDelete(replyMsg);
         return;
       }
-      let channel = interaction.channel;
-      if (config.scheduleChannelId) {
-        try {
-          channel = await interaction.guild.channels.fetch(config.scheduleChannelId);
-        } catch (err) {
-          console.error('[refreshschedule] Failed to fetch schedule channel:', err);
-          await interaction.reply({ content: 'Failed to fetch schedule channel. ' + (err.message || err), ephemeral: true });
-          return;
-        }
-      }
+      let channel = await resolveScheduleChannel(interaction.guild, interaction.channel);
       try {
         let msg = await postOrUpdateSchedule(channel, guild_id);
         if (!msg) {
@@ -223,7 +222,7 @@ function registerHandlers(client, config, DEFAULT_VOICE_CHANNEL_ID, DEFAULT_EVEN
           };
           try {
             const newMsg = await channel.send({ embeds: [embed] });
-            saveScheduleMessageId(newMsg.id);
+            saveScheduleMessageId(newMsg.id, guild_id);
             const replyMsg = await interaction.reply('Schedule refreshed and new embed posted.');
             autoDelete(replyMsg);
           } catch (err2) {
@@ -232,7 +231,7 @@ function registerHandlers(client, config, DEFAULT_VOICE_CHANNEL_ID, DEFAULT_EVEN
             autoDelete(replyMsg);
           }
         } else {
-          saveScheduleMessageId(msg.id);
+          saveScheduleMessageId(msg.id, guild_id);
           const replyMsg = await interaction.reply('Schedule refreshed.');
           autoDelete(replyMsg);
         }
@@ -261,10 +260,44 @@ function registerHandlers(client, config, DEFAULT_VOICE_CHANNEL_ID, DEFAULT_EVEN
         await interaction.reply({ content: 'Invalid channel.', ephemeral: true });
         return;
       }
-      config.scheduleChannelId = channel.id;
-      await interaction.reply(`Schedule channel set to <#${channel.id}>.`);
+      setGuildConfig(guild_id, { scheduleChannelId: channel.id });
+      const replyMsg = await interaction.reply(`Schedule channel set to <#${channel.id}>.`);
       logBot(`Schedule channel set to ${channel.id} by ${interaction.user.id} in guild ${guild_id}`);
-      autoDelete(sentMsg);
+      autoDelete(replyMsg);
+      return;
+    }
+    if (commandName === 'setvoicechannel') {
+      if (!isAdmin) {
+        const replyMsg = await interaction.reply('Only administrators can set the default voice channel.');
+        autoDelete(replyMsg);
+        return;
+      }
+      const channel = interaction.options.getChannel('channel');
+      if (!channel || channel.type !== 2) {
+        await interaction.reply({ content: 'Please select a valid voice channel.', ephemeral: true });
+        return;
+      }
+      setGuildConfig(guild_id, { voiceChannelId: channel.id });
+      const replyMsg = await interaction.reply(`Default voice channel set to <#${channel.id}>.`);
+      logBot(`Default voice channel set to ${channel.id} by ${interaction.user.id} in guild ${guild_id}`);
+      autoDelete(replyMsg);
+      return;
+    }
+    if (commandName === 'setadminrole') {
+      if (!isAdmin) {
+        const replyMsg = await interaction.reply('Only administrators can set the admin role.');
+        autoDelete(replyMsg);
+        return;
+      }
+      const role = interaction.options.getRole('role');
+      if (!role) {
+        await interaction.reply({ content: 'Please select a valid role.', ephemeral: true });
+        return;
+      }
+      setGuildConfig(guild_id, { adminRoleId: role.id });
+      const replyMsg = await interaction.reply(`Admin role set to <@&${role.id}>.`);
+      logBot(`Admin role set to ${role.id} by ${interaction.user.id} in guild ${guild_id}`);
+      autoDelete(replyMsg);
       return;
     }
     if (commandName === 'seteventtime') {
@@ -278,10 +311,10 @@ function registerHandlers(client, config, DEFAULT_VOICE_CHANNEL_ID, DEFAULT_EVEN
         await interaction.reply({ content: 'You must provide a time (e.g., Saturday 20:00).', ephemeral: true });
         return;
       }
-      config.eventTime = time;
-      await interaction.reply(`Event time set to ${time}.`);
+      setGuildConfig(guild_id, { eventTime: time });
+      const replyMsg = await interaction.reply(`Event time set to ${time}.`);
       logBot(`Event time set to ${time} by ${interaction.user.id} in guild ${guild_id}`);
-      autoDelete(sentMsg);
+      autoDelete(replyMsg);
       return;
     }
     if (commandName === 'setschedulemsg') {
@@ -293,21 +326,18 @@ function registerHandlers(client, config, DEFAULT_VOICE_CHANNEL_ID, DEFAULT_EVEN
       const msgId = interaction.options.getString('messageid');
       // Save the new schedule message ID and update in-memory variable
       const { saveScheduleMessageId, setScheduleMessageId } = require('./scheduleEmbed');
-      saveScheduleMessageId(msgId);
-      setScheduleMessageId(msgId);
+      saveScheduleMessageId(msgId, guild_id);
+      setScheduleMessageId(msgId, guild_id);
       // Reply immediately to avoid Discord timeout
-      await interaction.reply(`Schedule message ID set to ${msgId}.`);
+      const replyMsg = await interaction.reply(`Schedule message ID set to ${msgId}.`);
       logBot(`Schedule message ID set to ${msgId} by ${interaction.user.id} in guild ${guild_id}`);
-      autoDelete(sentMsg);
+      autoDelete(replyMsg);
       // Update the message in the background
       (async () => {
         try {
-          let updateChannel = interaction.channel;
-          if (config.scheduleChannelId) {
-            updateChannel = await interaction.guild.channels.fetch(config.scheduleChannelId);
-          }
+          const updateChannel = await resolveScheduleChannel(interaction.guild, interaction.channel);
           const { postOrUpdateSchedule } = require('./scheduleEmbed');
-          await postOrUpdateSchedule(updateChannel);
+          await postOrUpdateSchedule(updateChannel, guild_id);
         } catch (err) {
           console.error('[setschedulemsg] Failed to update schedule message after setting ID:', err);
         }
@@ -380,12 +410,7 @@ function registerHandlers(client, config, DEFAULT_VOICE_CHANNEL_ID, DEFAULT_EVEN
               }
               const replyMsg = await this.interaction.editReply(`Movie(s) added to the schedule for ${scheduleDate}.`);
               setTimeout(() => { replyMsg.delete?.().catch(() => {}); }, 10000);
-              let channel = this.interaction.channel;
-              if (config.scheduleChannelId) {
-                try {
-                  channel = await this.interaction.guild.channels.fetch(config.scheduleChannelId);
-                } catch {}
-              }
+              const channel = await resolveScheduleChannel(this.interaction.guild, this.interaction.channel);
               await postOrUpdateSchedule(channel, this.guild_id);
               pendingAddMovieSessions.delete(sessionKey);
               logBot(`Schedule updated for guild ${this.guild_id}`);
@@ -445,12 +470,7 @@ function registerHandlers(client, config, DEFAULT_VOICE_CHANNEL_ID, DEFAULT_EVEN
       const { addRSVP } = require('./roles');
       addRSVP(interaction.user.id);
       // Add Moviegoers role to the user (fetch from guild, not cache, for reliability)
-      let role = interaction.guild.roles.cache.find(r => r.name === 'Moviegoers');
-      if (!role) {
-        // Try to fetch all roles if not found in cache
-        await interaction.guild.roles.fetch();
-        role = interaction.guild.roles.cache.find(r => r.name === 'Moviegoers');
-      }
+      const role = await getOrCreateMoviegoersRole(interaction.guild);
       if (role) {
         try {
           await interaction.member.roles.add(role);
@@ -469,11 +489,7 @@ function registerHandlers(client, config, DEFAULT_VOICE_CHANNEL_ID, DEFAULT_EVEN
       const { removeRSVP } = require('./roles');
       removeRSVP(interaction.user.id);
       // Remove Moviegoers role from the user (fetch from guild, not cache, for reliability)
-      let role = interaction.guild.roles.cache.find(r => r.name === 'Moviegoers');
-      if (!role) {
-        await interaction.guild.roles.fetch();
-        role = interaction.guild.roles.cache.find(r => r.name === 'Moviegoers');
-      }
+      const role = await getOrCreateMoviegoersRole(interaction.guild);
       if (role) {
         try {
           await interaction.member.roles.remove(role);

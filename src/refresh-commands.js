@@ -22,6 +22,16 @@ const commands = [
     .addChannelOption(option =>
       option.setName('channel').setDescription('Channel to post schedule').setRequired(true)),
   new SlashCommandBuilder()
+    .setName('setvoicechannel')
+    .setDescription('Set the default voice channel for auto-started events')
+    .addChannelOption(option =>
+      option.setName('channel').setDescription('Voice channel to join for events').setRequired(true)),
+  new SlashCommandBuilder()
+    .setName('setadminrole')
+    .setDescription('Set the admin role used for restricted bot commands')
+    .addRoleOption(option =>
+      option.setName('role').setDescription('Role that can run admin commands').setRequired(true)),
+  new SlashCommandBuilder()
     .setName('seteventtime')
     .setDescription('Set the default event time (e.g., Saturday 20:00)')
     .addStringOption(option =>

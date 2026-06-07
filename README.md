@@ -30,22 +30,25 @@ A robust, open source Discord bot and dashboard for organizing and streaming mov
 ## Usage
 - Use slash commands in Discord to manage the schedule and events. All commands are non-ephemeral and auto-delete after 30 seconds.
 - The schedule is always posted/updated as a single plain text message in the configured channel, with all event dates (including special events) and correct time zone formatting.
-- Admins can set the schedule message ID with `/setschedulemsg` or by setting `SCHEDULE_MESSAGE_ID` in `.env`.
+- Per-server settings are configurable in Discord with `/setchannel`, `/setvoicechannel`, `/setadminrole`, `/seteventtime`, and `/setschedulemsg`.
 - The dashboard provides a web interface for viewing/updating the schedule and archives (admin-only). All actions are scoped to the current Discord server.
 
 ## Environment Variables
 - `DISCORD_TOKEN`: Your Discord bot token
 - `DISCORD_CLIENT_ID`: Discord application client ID
 - `DISCORD_CLIENT_SECRET`: Discord application client secret
-- `ADMIN_GUILD_ID`: Discord server (guild) ID (used for dashboard admin access)
-- `ADMIN_ROLE_ID`: Discord role ID for admin access
 - `DASHBOARD_SECRET`: Session secret for dashboard
 - `TMDB_API_KEY`: TheMovieDB API key
-- `SCHEDULE_MESSAGE_ID`: (Optional) Constant schedule message ID to always update
+- `SCHEDULE_MESSAGE_ID`: (Optional) global fallback schedule message ID (usually set per guild with `/setschedulemsg`)
+- `DEFAULT_SCHEDULE_CHANNEL_ID`: (Optional) fallback default for new guilds
+- `DEFAULT_VOICE_CHANNEL_ID`: (Optional) fallback default for new guilds
+- `DEFAULT_EVENT_TIME`: (Optional) fallback event time for new guilds (default: `Saturday 20:00`)
+- `ADMIN_ROLE_ID`: (Optional) fallback admin role for new guilds
 
 ## Development
 - All bot and dashboard logic is modularized in `src/`
-- Schedule message ID is persisted in `schedule-message-id.txt` unless overridden by `.env`
+- Schedule message IDs are persisted per guild in `guild-config.json` (with legacy fallback support for `schedule-message-id.txt`)
+- Guild settings are persisted in `guild-config.json` and isolated per guild
 - SQLite is used for schedule storage (`movie-schedule.db`), with all data stored per-guild (server-specific)
 - All sensitive files, logs, and database files are ignored by `.gitignore`
 - Dashboard session files are stored in `.sessions/` (gitignored)

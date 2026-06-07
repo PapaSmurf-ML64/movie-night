@@ -3,6 +3,7 @@ const schedule = require('./schedule');
 const fs = require('fs');
 const path = require('path');
 const { buildScheduleMappings } = require('./scheduleUtils');
+const { getGuildConfig, setGuildConfig } = require('./guildConfig');
 
 const scheduleMsgFile = path.join(__dirname, '../schedule-message-id.txt');
 
@@ -19,12 +20,20 @@ function loadScheduleMessageId() {
   } catch {}
   return null;
 }
-function saveScheduleMessageId(id) {
+function saveScheduleMessageId(id, guild_id) {
+  if (guild_id) {
+    setGuildConfig(guild_id, { scheduleMessageId: id || null });
+    return;
+  }
   try {
     fs.writeFileSync(scheduleMsgFile, id, 'utf8');
   } catch {}
 }
-function setScheduleMessageId(id) {
+function setScheduleMessageId(id, guild_id) {
+  if (guild_id) {
+    setGuildConfig(guild_id, { scheduleMessageId: id || null });
+    return;
+  }
   scheduleMessageId = id;
 }
 
@@ -100,25 +109,36 @@ async function postOrUpdateSchedule(channel, guild_id) {
     }
   });
   const scheduleText = lines.join('\n');
+  const guildConfig = getGuildConfig(guild_id);
+  let messageId = guildConfig.scheduleMessageId || scheduleMessageId;
   if (SCHEDULE_MESSAGE_ID) {
-    scheduleMessageId = SCHEDULE_MESSAGE_ID;
+    messageId = SCHEDULE_MESSAGE_ID;
   }
-  if (scheduleMessageId) {
+  if (messageId) {
     try {
-      const msg = await channel.messages.fetch(scheduleMessageId);
+      const msg = await channel.messages.fetch(messageId);
       await msg.edit(scheduleText);
       return msg;
     } catch {
-      scheduleMessageId = null;
-      saveScheduleMessageId('');
+      messageId = null;
+      if (guild_id) {
+        setGuildConfig(guild_id, { scheduleMessageId: null });
+      } else {
+        scheduleMessageId = null;
+        saveScheduleMessageId('');
+      }
       // fall through to post new message
     }
   }
   // If no valid message, post a new one and save the ID
   const newMsg = await channel.send(scheduleText);
   if (!SCHEDULE_MESSAGE_ID) {
-    scheduleMessageId = newMsg.id;
-    saveScheduleMessageId(newMsg.id);
+    if (guild_id) {
+      setGuildConfig(guild_id, { scheduleMessageId: newMsg.id });
+    } else {
+      scheduleMessageId = newMsg.id;
+      saveScheduleMessageId(newMsg.id);
+    }
   }
   return newMsg;
 }

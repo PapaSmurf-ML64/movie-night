@@ -6,6 +6,7 @@ const methodOverride = require('method-override');
 const { buildScheduleMappings } = require('./scheduleUtils');
 const roles = require('./roles');
 const rfs = require('rotating-file-stream');
+const { getGuildConfig } = require('./guildConfig');
 
 const app = express();
 app.set('view engine', 'ejs');
@@ -60,32 +61,147 @@ app.get('/logout', (req, res) => {
 });
 
 // Only allow access to dashboard if user is an admin in the Discord server
-const ADMIN_GUILD_ID = process.env.ADMIN_GUILD_ID;
-const ADMIN_ROLE_ID = process.env.ADMIN_ROLE_ID;
-
 const fetch = (...args) => import('node-fetch').then(({default: fetch}) => fetch(...args));
 
-async function isAdmin(user) {
-  // Use Discord API to check if user has admin role in the configured guild
-  if (!ADMIN_GUILD_ID || !ADMIN_ROLE_ID) return false;
+const ADMIN_PERMISSION = 0x8n;
+const MANAGE_GUILD_PERMISSION = 0x20n;
+const BOT_COMMANDS = [
+  { name: '/addmovie', description: 'Add one or more movies to the schedule, with optional date and year.' },
+  { name: '/startevent', description: 'Start the next scheduled movie event.' },
+  { name: '/stopevent', description: 'Stop the current movie event.' },
+  { name: '/refreshschedule', description: 'Refresh the posted schedule message in the configured channel.' },
+  { name: '/setchannel', description: 'Set which text channel the schedule is posted into for this server.' },
+  { name: '/setvoicechannel', description: 'Set the default voice channel used for event auto-start.' },
+  { name: '/setadminrole', description: 'Set the role allowed to manage restricted admin commands for this server.' },
+  { name: '/seteventtime', description: 'Set the default event time format for this server.' },
+  { name: '/reschedulemovie', description: 'Move a scheduled movie to a different date.' },
+  { name: '/rsvp', description: 'RSVP for movie night and receive notifications.' },
+  { name: '/unrsvp', description: 'Remove your RSVP/notification role for movie nights.' },
+  { name: '/setschedulemsg', description: 'Pin schedule updates to a specific message ID in the schedule channel.' },
+];
+
+function hasAdminPermission(permissions) {
+  try {
+    return (BigInt(permissions || '0') & ADMIN_PERMISSION) === ADMIN_PERMISSION;
+  } catch {
+    return false;
+  }
+}
+
+function hasManageGuildPermission(permissions) {
+  try {
+    return (BigInt(permissions || '0') & MANAGE_GUILD_PERMISSION) === MANAGE_GUILD_PERMISSION;
+  } catch {
+    return false;
+  }
+}
+
+function getGuildsUserCanManage(user) {
+  return Array.isArray(user?.guilds) ? user.guilds : [];
+}
+
+async function filterGuildsBotIsIn(guilds) {
+  if (!Array.isArray(guilds) || guilds.length === 0) return [];
+  if (!process.env.DISCORD_TOKEN) return [];
+
+  const checks = await Promise.all(guilds.map(async guild => {
+    try {
+      const url = `https://discord.com/api/v10/guilds/${guild.id}`;
+      const res = await fetch(url, {
+        headers: { Authorization: `Bot ${process.env.DISCORD_TOKEN}` }
+      });
+      return res.ok ? guild : null;
+    } catch {
+      return null;
+    }
+  }));
+
+  return checks.filter(Boolean);
+}
+
+async function getDashboardGuilds(user) {
+  const report = await getDashboardGuildAccessReport(user);
+  return report.included;
+}
+
+async function getDashboardGuildAccessReport(user) {
+  const userGuilds = getGuildsUserCanManage(user);
+  const included = [];
+  const excluded = [];
+
   if (!process.env.DISCORD_TOKEN) {
-    console.error('DISCORD_TOKEN is missing in .env');
-    return false;
+    return {
+      included,
+      excluded: userGuilds.map(g => ({ guild: g, reason: 'missing_bot_token' })),
+    };
   }
-  const url = `https://discord.com/api/v10/guilds/${ADMIN_GUILD_ID}/members/${user.id}`;
-  const res = await fetch(url, {
-    headers: { Authorization: `Bot ${process.env.DISCORD_TOKEN}` }
+
+  const checks = await Promise.all(userGuilds.map(async guild => {
+    try {
+      const guildUrl = `https://discord.com/api/v10/guilds/${guild.id}`;
+      const guildRes = await fetch(guildUrl, {
+        headers: { Authorization: `Bot ${process.env.DISCORD_TOKEN}` }
+      });
+      if (!guildRes.ok) {
+        return { guild, included: false, reason: 'bot_not_in_server' };
+      }
+
+      if (hasAdminPermission(guild.permissions) || hasManageGuildPermission(guild.permissions)) {
+        return { guild, included: true };
+      }
+
+      const guildConfig = getGuildConfig(guild.id);
+      if (!guildConfig.adminRoleId) {
+        return { guild, included: false, reason: 'no_admin_permission_and_no_admin_role_configured' };
+      }
+
+      const memberUrl = `https://discord.com/api/v10/guilds/${guild.id}/members/${user.id}`;
+      const memberRes = await fetch(memberUrl, {
+        headers: { Authorization: `Bot ${process.env.DISCORD_TOKEN}` }
+      });
+      if (!memberRes.ok) {
+        return { guild, included: false, reason: 'member_lookup_failed' };
+      }
+
+      const memberData = await memberRes.json();
+      if (!Array.isArray(memberData.roles)) {
+        return { guild, included: false, reason: 'member_lookup_failed' };
+      }
+
+      if (memberData.roles.includes(guildConfig.adminRoleId)) {
+        return { guild, included: true };
+      }
+
+      return { guild, included: false, reason: 'missing_configured_admin_role' };
+    } catch {
+      return { guild, included: false, reason: 'validation_error' };
+    }
+  }));
+
+  checks.forEach(result => {
+    if (result.included) {
+      included.push(result.guild);
+    } else {
+      excluded.push({ guild: result.guild, reason: result.reason });
+    }
   });
-  if (!res.ok) {
-    console.error('Failed to fetch member info from Discord API:', await res.text());
-    return false;
+
+  return { included, excluded };
+}
+
+function pickGuildId(req, manageableGuilds) {
+  if (!manageableGuilds.length) return null;
+  const requested = req.query.guild_id || req.body?.guild_id;
+  if (requested && manageableGuilds.some(g => g.id === requested)) {
+    return requested;
   }
-  const data = await res.json();
-  if (!data.roles) {
-    console.error('No roles found for user:', data);
-    return false;
-  }
-  return data.roles.includes(ADMIN_ROLE_ID);
+  return manageableGuilds[0].id;
+}
+
+async function isAdmin(user, guildId, availableGuilds) {
+  if (!guildId) return false;
+  const manageableGuilds = Array.isArray(availableGuilds) ? availableGuilds : await getDashboardGuilds(user);
+  return manageableGuilds.some(g => g.id === guildId);
 }
 
 const logStream = rfs.createStream('dashboard.log', {
@@ -99,10 +215,12 @@ function logDashboard(msg) {
 }
 
 app.get('/', ensureAuthenticated, async (req, res) => {
-  if (!(await isAdmin(req.user))) {
-    return res.status(403).send('You must be a Discord server admin to access this dashboard.');
+  const guildAccess = await getDashboardGuildAccessReport(req.user);
+  const manageableGuilds = guildAccess.included;
+  const guild_id = pickGuildId(req, manageableGuilds);
+  if (!guild_id || !(await isAdmin(req.user, guild_id, manageableGuilds))) {
+    return res.status(403).send('You must be an admin for the selected Discord server to access this dashboard.');
   }
-  const guild_id = process.env.ADMIN_GUILD_ID;
   // Get all scheduled movies and build a map by date
   const upcoming = await schedule.getUpcomingSchedule(guild_id);
   // Find the next Saturday from today (skip today if after 8PM)
@@ -131,7 +249,7 @@ app.get('/', ensureAuthenticated, async (req, res) => {
   });
   const allDates = Array.from(allDatesSet).sort();
   // Build movieByDate, addedByByDate, userMap
-  const { movieByDate, addedByByDate, userMap } = await buildScheduleMappings(upcoming, process.env.DISCORD_TOKEN);
+  const { userMap } = await buildScheduleMappings(upcoming, process.env.DISCORD_TOKEN);
   const mappings = await buildScheduleMappings(upcoming, process.env.DISCORD_TOKEN);
   const dashboardSchedule = mappings.dashboardSchedule;
   const archived = await schedule.getArchivedEvents(guild_id);
@@ -144,17 +262,31 @@ app.get('/', ensureAuthenticated, async (req, res) => {
     dashboardByDate[dateStr] = dashboardSchedule.filter(m => m.date === dateStr);
   });
   // Render the dashboard with the schedule data
-  res.render('dashboard', { dashboardSchedule, dashboardByDate, allDates, archived, user: req.user, rsvps, attendance, userMap, upcoming });
+  res.render('dashboard', {
+    dashboardSchedule,
+    dashboardByDate,
+    allDates,
+    archived,
+    user: req.user,
+    rsvps,
+    attendance,
+    userMap,
+    upcoming,
+    botCommands: BOT_COMMANDS,
+    guilds: manageableGuilds,
+    selectedGuildId: guild_id,
+  });
   logDashboard(`Route: / by ${req.user?.id || 'unknown'}`);
 });
 
 // Delete an archived event
 app.post('/delete-archived/:id', ensureAuthenticated, async (req, res) => {
-  if (!(await isAdmin(req.user))) return res.status(403).send('Forbidden');
+  const manageableGuilds = await getDashboardGuilds(req.user);
+  const guild_id = pickGuildId(req, manageableGuilds);
+  if (!guild_id || !(await isAdmin(req.user, guild_id, manageableGuilds))) return res.status(403).send('Forbidden');
   const id = req.params.id;
-  const guild_id = process.env.ADMIN_GUILD_ID;
   await schedule.removeMovie(id, guild_id);
-  res.redirect('/');
+  res.redirect(`/?guild_id=${guild_id}`);
   logDashboard(`Deleted archived event ${id} by ${req.user.id}`);
 });
 
@@ -166,9 +298,10 @@ app.post('/delete-archived', ensureAuthenticated, (req, res) => {
 
 // Archive a movie (set status to archived and set date to next available Saturday, and sync with Discord)
 app.post('/archive/:id', ensureAuthenticated, async (req, res) => {
-  if (!(await isAdmin(req.user))) return res.status(403).send('Forbidden');
+  const manageableGuilds = await getDashboardGuilds(req.user);
+  const guild_id = pickGuildId(req, manageableGuilds);
+  if (!guild_id || !(await isAdmin(req.user, guild_id, manageableGuilds))) return res.status(403).send('Forbidden');
   const id = req.params.id;
-  const guild_id = process.env.ADMIN_GUILD_ID;
   // Find the movie info
   const upcoming = await schedule.getUpcomingSchedule(guild_id);
   const movie = upcoming.find(m => m.id == id);
@@ -190,10 +323,11 @@ app.post('/archive/:id', ensureAuthenticated, async (req, res) => {
   try {
     const { Client, GatewayIntentBits, ChannelType, ThreadAutoArchiveDuration } = require('discord.js');
     const client = require('./bot').client || global._dashboardBotClient;
+    const guildConfig = getGuildConfig(guild_id);
     if (client && client.isReady()) {
-      const guild = await client.guilds.fetch(process.env.ADMIN_GUILD_ID);
-      let channel = guild.channels.cache.get(process.env.DEFAULT_SCHEDULE_CHANNEL_ID);
-      if (!channel) channel = await guild.channels.fetch(process.env.DEFAULT_SCHEDULE_CHANNEL_ID);
+      const guild = await client.guilds.fetch(guild_id);
+      let channel = guild.channels.cache.get(guildConfig.scheduleChannelId);
+      if (!channel) channel = await guild.channels.fetch(guildConfig.scheduleChannelId);
       // Get or create archive thread (reuse bot logic)
       const threadName = 'Archived Events';
       let thread = channel.threads.cache.find(t => t.name === threadName && t.type === ChannelType.PublicThread);
@@ -209,7 +343,7 @@ app.post('/archive/:id', ensureAuthenticated, async (req, res) => {
   } catch (e) {
     // Ignore Discord sync errors for dashboard
   }
-  res.redirect('/');
+  res.redirect(`/?guild_id=${guild_id}`);
   logDashboard(`Archived event ${id} to ${archiveDate} by ${req.user.id}`);
 });
 
