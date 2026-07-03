@@ -5,6 +5,7 @@ const { postOrUpdateSchedule, saveScheduleMessageId } = require('./scheduleEmbed
 const { autoDelete } = require('./util');
 const { logBot } = require('./logger');
 const { getGuildConfig, setGuildConfig } = require('./guildConfig');
+const { isThreadChannel } = require('./archiveThread');
 
 // At the top, add a map to track pending movie selections
 const pendingSelections = new Map();
@@ -45,10 +46,18 @@ function registerHandlers(client) {
 
   async function resolveScheduleChannel(guild, fallbackChannel) {
     const guildConfig = getGuildConfig(guild.id);
-    if (!guildConfig.scheduleChannelId) return fallbackChannel;
+    if (!guildConfig.scheduleChannelId) {
+      if (fallbackChannel?.id) setGuildConfig(guild.id, { scheduleChannelId: fallbackChannel.id });
+      return fallbackChannel;
+    }
     try {
-      return await guild.channels.fetch(guildConfig.scheduleChannelId);
+      const channel = await guild.channels.fetch(guildConfig.scheduleChannelId);
+      if (channel?.id && guildConfig.scheduleChannelId !== channel.id) {
+        setGuildConfig(guild.id, { scheduleChannelId: channel.id });
+      }
+      return channel;
     } catch {
+      if (fallbackChannel?.id) setGuildConfig(guild.id, { scheduleChannelId: fallbackChannel.id });
       return fallbackChannel;
     }
   }
@@ -297,6 +306,23 @@ function registerHandlers(client) {
       setGuildConfig(guild_id, { adminRoleId: role.id });
       const replyMsg = await interaction.reply(`Admin role set to <@&${role.id}>.`);
       logBot(`Admin role set to ${role.id} by ${interaction.user.id} in guild ${guild_id}`);
+      autoDelete(replyMsg);
+      return;
+    }
+    if (commandName === 'setarchivethread') {
+      if (!isAdmin) {
+        const replyMsg = await interaction.reply('Only administrators can set the archive thread.');
+        autoDelete(replyMsg);
+        return;
+      }
+      const thread = interaction.options.getChannel('thread');
+      if (!isThreadChannel(thread)) {
+        await interaction.reply({ content: 'Please select a valid thread channel.', ephemeral: true });
+        return;
+      }
+      setGuildConfig(guild_id, { archiveThreadId: thread.id });
+      const replyMsg = await interaction.reply(`Archive thread set to <#${thread.id}>.`);
+      logBot(`Archive thread set to ${thread.id} by ${interaction.user.id} in guild ${guild_id}`);
       autoDelete(replyMsg);
       return;
     }

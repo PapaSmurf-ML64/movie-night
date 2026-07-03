@@ -7,6 +7,7 @@ const { buildScheduleMappings } = require('./scheduleUtils');
 const roles = require('./roles');
 const rfs = require('rotating-file-stream');
 const { getGuildConfig } = require('./guildConfig');
+const { resolveArchiveThread } = require('./archiveThread');
 
 const app = express();
 app.set('view engine', 'ejs');
@@ -73,6 +74,7 @@ const BOT_COMMANDS = [
   { name: '/setchannel', description: 'Set which text channel the schedule is posted into for this server.' },
   { name: '/setvoicechannel', description: 'Set the default voice channel used for event auto-start.' },
   { name: '/setadminrole', description: 'Set the role allowed to manage restricted admin commands for this server.' },
+  { name: '/setarchivethread', description: 'Set an existing thread for archived event posts.' },
   { name: '/seteventtime', description: 'Set the default event time format for this server.' },
   { name: '/reschedulemovie', description: 'Move a scheduled movie to a different date.' },
   { name: '/rsvp', description: 'RSVP for movie night and receive notifications.' },
@@ -321,23 +323,12 @@ app.post('/archive/:id', ensureAuthenticated, async (req, res) => {
 
   // Discord sync: post to archive thread
   try {
-    const { Client, GatewayIntentBits, ChannelType, ThreadAutoArchiveDuration } = require('discord.js');
+    const { Client, GatewayIntentBits } = require('discord.js');
     const client = require('./bot').client || global._dashboardBotClient;
     const guildConfig = getGuildConfig(guild_id);
     if (client && client.isReady()) {
       const guild = await client.guilds.fetch(guild_id);
-      let channel = guild.channels.cache.get(guildConfig.scheduleChannelId);
-      if (!channel) channel = await guild.channels.fetch(guildConfig.scheduleChannelId);
-      // Get or create archive thread (reuse bot logic)
-      const threadName = 'Archived Events';
-      let thread = channel.threads.cache.find(t => t.name === threadName && t.type === ChannelType.PublicThread);
-      if (!thread) {
-        thread = await channel.threads.create({
-          name: threadName,
-          autoArchiveDuration: ThreadAutoArchiveDuration.OneWeek,
-          reason: 'Archive completed movie events',
-        });
-      }
+      const thread = await resolveArchiveThread(guild, guildConfig);
       await thread.send(`**${movie.title}** was watched on ${archiveDate}.`);
     }
   } catch (e) {

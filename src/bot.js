@@ -1,13 +1,14 @@
 // Entry point for the Movie Night Discord Bot
 require('dotenv').config();
-const { Client, GatewayIntentBits, REST, Routes, SlashCommandBuilder, Collection } = require('discord.js');
+const { Client, GatewayIntentBits, REST, Routes, SlashCommandBuilder, Collection, ChannelType } = require('discord.js');
 const { postOrUpdateSchedule } = require('./scheduleEmbed');
 const { registerHandlers } = require('./commands');
 const { getRSVPs, getAttendance } = require('./roles');
 const { joinConfiguredVoiceChannel } = require('./voice');
 const { logBot } = require('./logger');
 const { DateTime } = require('luxon');
-const { getGuildConfig } = require('./guildConfig');
+const { getGuildConfig, setGuildConfig } = require('./guildConfig');
+const { resolveArchiveThread } = require('./archiveThread');
 
 const client = new Client({
   intents: [
@@ -55,6 +56,15 @@ const commands = [
     .setDescription('Set the admin role used for restricted bot commands')
     .addRoleOption(option =>
       option.setName('role').setDescription('Role that can run admin commands').setRequired(true)),
+  new SlashCommandBuilder()
+    .setName('setarchivethread')
+    .setDescription('Set the archive thread used for completed events')
+    .addChannelOption(option =>
+      option
+        .setName('thread')
+        .setDescription('Existing thread for archived event posts')
+        .addChannelTypes(ChannelType.PublicThread, ChannelType.PrivateThread, ChannelType.AnnouncementThread)
+        .setRequired(true)),
   new SlashCommandBuilder()
     .setName('seteventtime')
     .setDescription('Set the default event time (e.g., Saturday 20:00)')
@@ -110,6 +120,32 @@ client.once('ready', async () => {
 });
 
 // Auto-archive events 2 hours after scheduled time
+async function resolveScheduleChannel(guild, guildConfig) {
+  if (guildConfig.scheduleChannelId) {
+    try {
+      const channel = guild.channels.cache.get(guildConfig.scheduleChannelId) || await guild.channels.fetch(guildConfig.scheduleChannelId);
+      if (channel?.isTextBased?.()) return channel;
+    } catch {}
+  }
+
+  const scheduleMessageId = guildConfig.scheduleMessageId;
+  if (scheduleMessageId) {
+    const channels = await guild.channels.fetch();
+    for (const channel of channels.values()) {
+      if (!channel?.isTextBased?.()) continue;
+      try {
+        await channel.messages.fetch(scheduleMessageId);
+        if (channel.id && guildConfig.scheduleChannelId !== channel.id) {
+          setGuildConfig(guild.id, { scheduleChannelId: channel.id });
+        }
+        return channel;
+      } catch {}
+    }
+  }
+
+  return null;
+}
+
 async function autoArchivePastEvents() {
   const schedule = require('./schedule');
   for (const guild of client.guilds.cache.values()) {
@@ -127,29 +163,15 @@ async function autoArchivePastEvents() {
         logBot(`Auto-archived event ${event.title} (${event.id}) for guild ${guildId}`);
         // Post to Discord archive thread
         try {
-          if (guildConfig.scheduleChannelId) {
-            const { ChannelType, ThreadAutoArchiveDuration } = require('discord.js');
-            let channel = guild.channels.cache.get(guildConfig.scheduleChannelId);
-            if (!channel) channel = await guild.channels.fetch(guildConfig.scheduleChannelId);
-            const threadName = 'Archived Events';
-            let thread = channel.threads.cache.find(t => t.name === threadName && t.type === ChannelType.PublicThread);
-            if (!thread) {
-              thread = await channel.threads.create({
-                name: threadName,
-                autoArchiveDuration: ThreadAutoArchiveDuration.OneWeek,
-                reason: 'Archive completed movie events',
-              });
-            }
-            await thread.send(`**${event.title}** was watched on ${archiveTime.toISODate()}.`);
-          }
+          const thread = await resolveArchiveThread(guild, guildConfig);
+          await thread.send(`**${event.title}** was watched on ${archiveTime.toISODate()}.`);
         } catch (e) {
           logBot(`Failed to post to archive thread for event ${event.id}: ${e.message}`);
         }
         // Update the schedule message after archiving
         try {
-          if (guildConfig.scheduleChannelId) {
-            let channel = guild.channels.cache.get(guildConfig.scheduleChannelId);
-            if (!channel) channel = await guild.channels.fetch(guildConfig.scheduleChannelId);
+          const channel = await resolveScheduleChannel(guild, guildConfig);
+          if (channel) {
             await postOrUpdateSchedule(channel, guildId);
             logBot(`Schedule message updated after auto-archiving event ${event.title} (${event.id})`);
           }
@@ -189,10 +211,10 @@ async function autoStartScheduledEvents() {
         !global._pingedEvents.has(event.id) &&
         !global._pingedEventDates.has(event.date)
       ) {
+        let sentPing = false;
         try {
-          if (guildConfig.scheduleChannelId) {
-            let channel = guild.channels.cache.get(guildConfig.scheduleChannelId);
-            if (!channel) channel = await guild.channels.fetch(guildConfig.scheduleChannelId);
+          const channel = await resolveScheduleChannel(guild, guildConfig);
+          if (channel) {
             const moviegoersRole = guild.roles.cache.find(r => r.name === 'Moviegoers');
             let roleMention = moviegoersRole ? `<@&${moviegoersRole.id}>` : '@everyone';
             // Fetch all movies for this event date
@@ -225,12 +247,17 @@ async function autoStartScheduledEvents() {
               setTimeout(() => { sentMsg.delete().catch(() => {}); }, 60 * 60 * 1000);
             }
             logBot(`Sent 5-min pre-event ping for event date ${event.date} in channel ${guildConfig.scheduleChannelId}`);
+            sentPing = true;
+          } else {
+            logBot(`Skipped 5-min pre-event ping for event ${event.id}: no schedule channel configured or discoverable.`);
           }
         } catch (e) {
           logBot(`Failed to send 5-min pre-event ping for event ${event.id}: ${e.message}`);
         }
-        global._pingedEvents.add(event.id);
-        global._pingedEventDates.add(event.date);
+        if (sentPing) {
+          global._pingedEvents.add(event.id);
+          global._pingedEventDates.add(event.date);
+        }
       }
       // Join voice channel exactly at event start, only once
       global._startedEvents = global._startedEvents || new Set();
