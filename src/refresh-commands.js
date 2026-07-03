@@ -1,6 +1,6 @@
 // Force refresh Discord slash commands
 require('dotenv').config();
-const { REST, Routes } = require('discord.js');
+const { REST, Routes, ChannelType } = require('discord.js');
 const { SlashCommandBuilder } = require('discord.js');
 
 const commands = [
@@ -31,6 +31,15 @@ const commands = [
     .setDescription('Set the admin role used for restricted bot commands')
     .addRoleOption(option =>
       option.setName('role').setDescription('Role that can run admin commands').setRequired(true)),
+  new SlashCommandBuilder()
+    .setName('setarchivethread')
+    .setDescription('Set the archive thread used for completed events')
+    .addChannelOption(option =>
+      option
+        .setName('thread')
+        .setDescription('Existing thread for archived event posts')
+        .addChannelTypes(ChannelType.PublicThread, ChannelType.PrivateThread, ChannelType.AnnouncementThread)
+        .setRequired(true)),
   new SlashCommandBuilder()
     .setName('seteventtime')
     .setDescription('Set the default event time (e.g., Saturday 20:00)')

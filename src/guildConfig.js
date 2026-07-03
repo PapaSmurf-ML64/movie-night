@@ -31,6 +31,7 @@ function getDefaultConfig() {
     eventTime: process.env.DEFAULT_EVENT_TIME || 'Saturday 20:00',
     adminRoleId: process.env.ADMIN_ROLE_ID || null,
     scheduleMessageId: process.env.SCHEDULE_MESSAGE_ID || null,
+    archiveThreadId: null,
   };
 }
 

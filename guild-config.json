@@ -1,9 +1,10 @@
 {
   "451484167562330112": {
-    "scheduleChannelId": null,
+    "scheduleChannelId": "1219079550282104953",
     "voiceChannelId": null,
     "eventTime": "Saturday 20:00",
     "adminRoleId": "1380233941474218105",
-    "scheduleMessageId": null
+    "scheduleMessageId": "1380234992197570620",
+    "archiveThreadId": "1381031869235073095"
   }
 }
