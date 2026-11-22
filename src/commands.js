@@ -1,7 +1,7 @@
 // All slash command and interaction handlers
 const schedule = require('./schedule');
 const tmdb = require('./tmdb');
-const { postOrUpdateSchedule, saveScheduleMessageId, setScheduleMessageId } = require('./scheduleEmbed');
+const { postOrUpdateSchedule, saveScheduleMessageId } = require('./scheduleEmbed');
 const { autoDelete, getEventSettings, nextEventDate, parseEventTime, formatEventTime, validateEventDate, formatMonthDay } = require('./util');
 const { joinConfiguredVoiceChannel, leaveVoiceChannel } = require('./voice');
 const { clearWatching } = require('./nickname');
@@ -262,8 +262,7 @@ async function handleAddMovie(interaction, guild_id) {
 async function handleRefreshSchedule(interaction, guild_id) {
   const channel = await resolveScheduleChannel(interaction.guild, interaction.channel);
   try {
-    const msg = await postOrUpdateSchedule(channel, guild_id);
-    saveScheduleMessageId(msg.id, guild_id);
+    await postOrUpdateSchedule(channel, guild_id);
     await replyAndDelete(interaction, 'Schedule refreshed.');
     logBot(`Schedule refreshed by ${interaction.user.id} in guild ${guild_id}`);
   } catch (err) {
@@ -276,7 +275,6 @@ async function handleRefreshSchedule(interaction, guild_id) {
 async function handleSetScheduleMsg(interaction, guild_id) {
   const msgId = interaction.options.getString('messageid');
   saveScheduleMessageId(msgId, guild_id);
-  setScheduleMessageId(msgId, guild_id);
   // Reply immediately to avoid Discord timeout, then update the message in the background
   await replyAndDelete(interaction, `Schedule message ID set to ${msgId}.`);
   logBot(`Schedule message ID set to ${msgId} by ${interaction.user.id} in guild ${guild_id}`);

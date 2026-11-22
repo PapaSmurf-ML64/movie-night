@@ -109,4 +109,4 @@ async function afterMovieAdded(guildId, movie) {
   return `${availability.emoji} ${movie.title}: ${availability.label}`;
 }
 
-module.exports = { getAvailability, requestMovie, afterMovieAdded, hasAnyIntegration, STATES };
+module.exports = { getAvailability, requestMovie, afterMovieAdded };

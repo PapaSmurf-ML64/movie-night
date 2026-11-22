@@ -101,8 +101,6 @@ function eventUnixTimestamp(s, settings) {
 
 module.exports = {
   autoDelete,
-  MONTHS,
-  EVENT_TZ,
   parseEventTime,
   formatEventTime,
   getEventSettings,
@@ -110,7 +108,6 @@ module.exports = {
   nextEventDate,
   upcomingEventDates,
   todayStr,
-  isValidDateStr,
   validateEventDate,
   formatMonthDay,
   dayOfWeek,

@@ -67,4 +67,4 @@ async function fetchJson(guildId, url, { method = 'GET', headers = {}, body } = 
   try { return text ? JSON.parse(text) : null; } catch { throw new Error('Unexpected (non-JSON) response; check the URL.'); }
 }
 
-module.exports = { fetchJson, normalizeBaseUrl, isPrivateAddress };
+module.exports = { fetchJson, normalizeBaseUrl };

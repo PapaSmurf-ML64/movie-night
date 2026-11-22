@@ -214,4 +214,4 @@ async function closeDueVotes(guild, roleMention) {
   return closed;
 }
 
-module.exports = { startVote, handleVoteButton, closeDueVotes, pickCandidates, themeFor, themeScore, BUTTON_PREFIX, MONTH_THEMES, SEASON_THEMES };
+module.exports = { startVote, handleVoteButton, closeDueVotes, BUTTON_PREFIX };

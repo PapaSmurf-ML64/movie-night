@@ -6,13 +6,9 @@
     "start": "node src/index.js",
     "refresh-commands": "node src/refresh-commands.js"
   },
-  "keywords": [],
-  "author": "",
-  "license": "ISC",
-  "description": "",
+  "license": "GPL-3.0-only",
+  "description": "Discord bot and web dashboard for scheduling movie nights, with optional Plex, Seerr, Radarr and Tautulli integration",
   "dependencies": {
-    "@discordjs/builders": "^1.11.2",
-    "@discordjs/rest": "^2.5.0",
     "@discordjs/voice": "^0.18.0",
     "busboy": "^1.6.0",
     "discord.js": "^14.19.3",
@@ -20,12 +16,14 @@
     "ejs": "^3.1.10",
     "express": "^5.1.0",
     "express-session": "^1.18.1",
-    "ffmpeg-static": "^5.2.0",
     "luxon": "^3.6.1",
     "passport": "^0.7.0",
     "passport-discord": "^0.1.4",
     "rotating-file-stream": "^3.2.6",
     "session-file-store": "^1.5.0",
     "sqlite3": "^5.1.7"
+  },
+  "engines": {
+    "node": ">=18"
   }
 }

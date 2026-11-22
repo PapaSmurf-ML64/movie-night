@@ -164,7 +164,5 @@ module.exports = {
   fromTautulliPayload,
   linkPlexUser,
   unlinkPlexUser,
-  activeWindowDate,
   TAUTULLI_TEMPLATE,
-  WINDOW_AFTER_HOURS,
 };

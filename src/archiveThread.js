@@ -48,5 +48,4 @@ async function resolveArchiveThread(guild, guildConfig) {
 module.exports = {
   resolveArchiveThread,
   isThreadChannel,
-  ARCHIVE_THREAD_NAME,
 };
