@@ -40,3 +40,4 @@ dashboard.log.txt
 
 # Backups
 *.bak
+movie-schedule.db.bak
