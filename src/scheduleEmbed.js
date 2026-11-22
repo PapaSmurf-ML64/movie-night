@@ -4,6 +4,7 @@ const fs = require('fs');
 const path = require('path');
 const { buildScheduleMappings } = require('./scheduleUtils');
 const { getGuildConfig, setGuildConfig } = require('./guildConfig');
+const { eventUnixTimestamp, getEventSettings } = require('./util');
 
 const scheduleMsgFile = path.join(__dirname, '../schedule-message-id.txt');
 
@@ -41,73 +42,17 @@ function setScheduleMessageId(id, guild_id) {
 async function postOrUpdateSchedule(channel, guild_id) {
   // Get all scheduled movies for this guild
   const scheduled = await schedule.getUpcomingSchedule(guild_id);
-  // Build a list of all Saturdays (8PM) until the end of the year
-  const now = new Date();
-  let nextSaturday = new Date(now);
-  nextSaturday.setHours(20, 0, 0, 0); // 8PM
-  const day = nextSaturday.getDay();
-  if (!(day === 6 && now < nextSaturday)) {
-    const daysUntilSaturday = (6 - day + 7) % 7 || 7;
-    nextSaturday.setDate(nextSaturday.getDate() + daysUntilSaturday);
+  // Only dates with movies are shown, so just group scheduled movies by date
+  const { movieByDate } = await buildScheduleMappings(scheduled);
+  const settings = getEventSettings(guild_id);
+  const lines = ['# Upcoming Movie Nights'];
+  for (const dateStr of Object.keys(movieByDate).sort()) {
+    const titles = movieByDate[dateStr]
+      .map(m => m.release_date ? `${m.title} (${m.release_date.slice(0, 4)})` : m.title)
+      .join(', ');
+    // <t:…:F> = full weekday, date and time, rendered by Discord in each reader's own timezone
+    lines.push(`<t:${eventUnixTimestamp(dateStr, settings)}:F> — ${titles}`);
   }
-  const year = now.getFullYear();
-  let saturdays = [];
-  let d = new Date(nextSaturday);
-  while (d.getFullYear() === year) {
-    saturdays.push(new Date(d));
-    d.setDate(d.getDate() + 7);
-  }
-  // Add all special event dates (non-Saturdays) from the database
-  const allDatesSet = new Set(saturdays.map(date => date.toISOString().slice(0, 10)));
-  scheduled.forEach(m => {
-    if (m.date && !allDatesSet.has(m.date)) {
-      allDatesSet.add(m.date);
-    }
-  });
-  const allDates = Array.from(allDatesSet).sort();
-  const months = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
-  // Build movieByDate using shared utility
-  const { movieByDate } = await buildScheduleMappings(scheduled, process.env.DISCORD_TOKEN);
-  // Build plain text schedule
-  let lines = [
-    '# Upcoming Movie Nights'
-  ];
-  // Find the longest formatted date string for alignment
-  let formattedDates = allDates.map(dateStr => {
-    const date = new Date(dateStr);
-    const month = months[date.getMonth()];
-    const day = date.getDate();
-    const year = date.getFullYear();
-    // Find 2nd Sunday in March
-    let march = new Date(Date.UTC(year, 2, 1));
-    let secondSundayMarch = new Date(march);
-    secondSundayMarch.setUTCDate(1 + ((7 - march.getUTCDay()) % 7) + 7); // 2nd Sunday
-    // Find 1st Sunday in November
-    let november = new Date(Date.UTC(year, 10, 1));
-    let firstSundayNovember = new Date(november);
-    firstSundayNovember.setUTCDate(1 + ((7 - november.getUTCDay()) % 7));
-    // DST: if the *start* of the event is before the first Sunday in November, it's still daylight time
-    let utcHour = 1; // 8PM -5 UTC (Standard)
-    if (date < firstSundayNovember && date >= secondSundayMarch) {
-      utcHour = 0; // 8PM -4 UTC (Daylight)
-    }
-    // 8PM local is either 0:00 or 1:00 UTC *next day*
-    const utcDate = new Date(Date.UTC(date.getFullYear(), date.getMonth(), date.getDate() + 1, utcHour, 0, 0));
-    const unixTimestamp = Math.floor(utcDate.getTime() / 1000);
-    return `${month} ${day} @ <t:${unixTimestamp}:t>`;
-  });
-  // Use tabs for padding to align movie titles at the same position
-  const maxDateLen = Math.max(...formattedDates.map(s => s.length));
-  const minTitleCol = 40; // Increase minimum column for more space
-  const titleCol = Math.max(maxDateLen + 2, minTitleCol);
-  allDates.forEach((dateStr, i) => {
-    let formattedDate = formattedDates[i];
-    const movies = movieByDate[dateStr] || [];
-    if (movies.length > 0) {
-      const titles = movies.map(m => m.release_date ? `${m.title} (${m.release_date.slice(0,4)})` : m.title).join(', ');
-      lines.push(`${formattedDate} — ${titles}`);
-    }
-  });
   const scheduleText = lines.join('\n');
   const guildConfig = getGuildConfig(guild_id);
   let messageId = guildConfig.scheduleMessageId || scheduleMessageId;

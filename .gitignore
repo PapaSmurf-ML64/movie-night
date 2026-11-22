@@ -37,3 +37,6 @@ schedule-message-id.txt
 .sessions/
 bot.log.txt
 dashboard.log.txt
+
+# Backups
+*.bak

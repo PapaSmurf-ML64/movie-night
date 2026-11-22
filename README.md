@@ -24,14 +24,21 @@ A robust, open source Discord bot and dashboard for organizing and streaming mov
 2. Copy `.env.example` to `.env` and fill in your Discord bot token, TMDB API key, and other secrets.
 3. (Optional) Set `SCHEDULE_MESSAGE_ID` in `.env` to force the bot to always update a specific schedule message.
 4. Run `npm install` to install dependencies.
-5. Start the bot with `node src/bot.js` or use the provided VS Code task for auto-restart.
-6. Start the dashboard with `node src/dashboard.js` (or use a process manager for production).
+5. Start the bot and dashboard together with `npm start` (runs `node src/index.js`; use a process manager for production).
 
 ## Usage
 - Use slash commands in Discord to manage the schedule and events. All commands are non-ephemeral and auto-delete after 30 seconds.
 - The schedule is always posted/updated as a single plain text message in the configured channel, with all event dates (including special events) and correct time zone formatting.
 - Per-server settings are configurable in Discord with `/setchannel`, `/setvoicechannel`, `/setadminrole`, `/seteventtime`, and `/setschedulemsg`.
 - The dashboard provides a web interface for viewing/updating the schedule and archives (admin-only). All actions are scoped to the current Discord server.
+
+## Plex / Seerr / Radarr
+Each Discord server configures its own integrations in the dashboard's **Integrations** section:
+- **Plex**: shows whether each scheduled movie is in the library.
+- **Overseerr/Jellyseerr** (preferred) or **Radarr**: requests movies that aren't on Plex, automatically when added (toggleable) or via the dashboard's Request button.
+- **Playback webhooks** (Plex Pass webhooks and/or Tautulli): post "Now playing", count attendance for members who link their Plex username with `/linkplex`, and archive each movie when it's watched.
+
+Secrets are encrypted in the database. For safety, integrations can't use private/LAN addresses unless the server's ID is listed in `INTEGRATIONS_PRIVATE_GUILDS`.
 
 ## Environment Variables
 - `DISCORD_TOKEN`: Your Discord bot token

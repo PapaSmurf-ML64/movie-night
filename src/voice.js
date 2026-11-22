@@ -1,5 +1,5 @@
 // Voice channel join/stream logic
-const { joinVoiceChannel, entersState, VoiceConnectionStatus } = require('@discordjs/voice');
+const { joinVoiceChannel, entersState, VoiceConnectionStatus, getVoiceConnection } = require('@discordjs/voice');
 
 async function joinConfiguredVoiceChannel(guild, channelId) {
   if (!channelId) throw new Error('No default voice channel configured.');
@@ -14,4 +14,12 @@ async function joinConfiguredVoiceChannel(guild, channelId) {
   return connection;
 }
 
-module.exports = { joinConfiguredVoiceChannel };
+// Disconnect from voice in a guild; returns false if not connected
+function leaveVoiceChannel(guildId) {
+  const connection = getVoiceConnection(guildId);
+  if (!connection) return false;
+  connection.destroy();
+  return true;
+}
+
+module.exports = { joinConfiguredVoiceChannel, leaveVoiceChannel };

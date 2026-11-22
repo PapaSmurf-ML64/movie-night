@@ -1,35 +1,99 @@
+// Web dashboard. Runs inside the bot process (see index.js) so it shares the Discord client and live state.
 require('dotenv').config();
+const crypto = require('crypto');
 const express = require('express');
 const path = require('path');
-const schedule = require('./schedule');
-const methodOverride = require('method-override');
-const { buildScheduleMappings } = require('./scheduleUtils');
-const roles = require('./roles');
 const rfs = require('rotating-file-stream');
+const session = require('express-session');
+const passport = require('passport');
+const DiscordStrategy = require('passport-discord').Strategy;
+const schedule = require('./schedule');
+const tmdb = require('./tmdb');
+const roles = require('./roles');
+const { buildScheduleMappings, nextFreeEventDate } = require('./scheduleUtils');
+const { getEventSettings, upcomingEventDates, todayStr, validateEventDate, eventStart } = require('./util');
 const { getGuildConfig } = require('./guildConfig');
 const { resolveArchiveThread } = require('./archiveThread');
+const Busboy = require('busboy');
+const integrations = require('./integrations');
+const integrationStore = require('./integrations/store');
+const { normalizeBaseUrl } = require('./integrations/http');
+const { testPlex } = require('./integrations/plex');
+const { testSeerr } = require('./integrations/seerr');
+const { testRadarr } = require('./integrations/radarr');
+const playback = require('./integrations/playback');
+const { clearWatchingIfArchived } = require('./nickname');
+
+// Set by startDashboard(): the bot's Discord client and a schedule-message refresher
+let client = null;
+let refreshScheduleMessage = async () => {};
+
+const DASHBOARD_SECRET = process.env.DASHBOARD_SECRET;
+const PLACEHOLDER_SECRETS = new Set(['', 'changeme', 'your_dashboard_secret_here']);
 
 const app = express();
 app.set('view engine', 'ejs');
 app.set('views', path.join(__dirname, '../views'));
+// Trust X-Forwarded-* only from a reverse proxy on this machine, so secure cookies work behind nginx/caddy
+app.set('trust proxy', 'loopback');
+app.use(express.static(path.join(__dirname, '../public'), { maxAge: '1h' }));
+
+// ---- Playback webhooks (no session/CSRF: authenticated by the per-guild secret in the URL) ----
+async function webhookGuild(req, res, enabledKey) {
+  const { guildId, token } = req.params;
+  if (!/^\d{5,25}$/.test(guildId)) { res.status(404).end(); return null; }
+  const config = await integrationStore.getIntegrations(guildId);
+  if (!integrationStore.tokenMatches(config, token)) { res.status(404).end(); return null; }
+  if (!config[enabledKey]) { res.status(409).send('This webhook is disabled in the dashboard.'); return null; }
+  return config;
+}
+
+async function applyPlaybackEvent(guildId, event, res) {
+  if (!event) return res.status(204).end();
+  try {
+    const result = await playback.handlePlaybackEvent(guildId, event);
+    if (result.handled) logDashboard(`Webhook ${event.source} ${event.action} for guild ${guildId}: ${result.action} ${result.movie}`);
+    res.status(200).json(result);
+  } catch (e) {
+    logDashboard(`Webhook ${event.source} failed for guild ${guildId}: ${e.message}`);
+    res.status(500).json({ error: 'failed' });
+  }
+}
+
+// Plex sends multipart/form-data with a JSON "payload" field (plus an optional thumbnail we ignore)
+app.post('/webhooks/plex/:guildId/:token', async (req, res) => {
+  const config = await webhookGuild(req, res, 'plexWebhooks');
+  if (!config) return req.resume();
+  let payload = null;
+  try {
+    const bb = Busboy({ headers: req.headers, limits: { fileSize: 0, fieldSize: 256 * 1024, fields: 5 } });
+    bb.on('field', (name, value) => { if (name === 'payload') payload = value; });
+    bb.on('file', (name, stream) => stream.resume());
+    await new Promise((resolve, reject) => { bb.on('close', resolve); bb.on('error', reject); req.pipe(bb); });
+    payload = JSON.parse(payload);
+  } catch {
+    return res.status(400).send('Bad Plex payload');
+  }
+  applyPlaybackEvent(req.params.guildId, playback.fromPlexPayload(payload, config.plex.machineId), res);
+});
+
+app.post('/webhooks/tautulli/:guildId/:token', express.json({ limit: '64kb' }), async (req, res) => {
+  const config = await webhookGuild(req, res, 'tautulliWebhooks');
+  if (!config) return;
+  applyPlaybackEvent(req.params.guildId, playback.fromTautulliPayload(req.body), res);
+});
+
 app.use(express.urlencoded({ extended: true }));
-app.use(methodOverride('_method'));
 
-const DISCORD_CLIENT_ID = process.env.DISCORD_CLIENT_ID;
-const DISCORD_CLIENT_SECRET = process.env.DISCORD_CLIENT_SECRET;
-const DASHBOARD_SECRET = process.env.DASHBOARD_SECRET || 'changeme';
-const session = require('express-session');
-const passport = require('passport');
-const DiscordStrategy = require('passport-discord').Strategy;
-
-app.use(session({ 
-  secret: DASHBOARD_SECRET, 
-  resave: false, 
-  saveUninitialized: false, 
-  cookie: { 
+app.use(session({
+  secret: DASHBOARD_SECRET || 'unset',
+  resave: false,
+  saveUninitialized: false,
+  cookie: {
     maxAge: 30 * 24 * 60 * 60 * 1000, // 30 days
     sameSite: 'lax',
-    secure: false // Set to true if using HTTPS
+    httpOnly: true,
+    secure: 'auto', // secure when the request arrived over HTTPS
   },
   store: new (require('session-file-store')(session))({ path: './.sessions', retries: 1 })
 }));
@@ -40,16 +104,35 @@ passport.serializeUser((user, done) => done(null, user));
 passport.deserializeUser((obj, done) => done(null, obj));
 
 passport.use(new DiscordStrategy({
-  clientID: DISCORD_CLIENT_ID,
-  clientSecret: DISCORD_CLIENT_SECRET,
+  clientID: process.env.DISCORD_CLIENT_ID,
+  clientSecret: process.env.DISCORD_CLIENT_SECRET,
   callbackURL: '/auth/discord/callback',
   scope: ['identify', 'guilds', 'guilds.members.read']
 }, (accessToken, refreshToken, profile, done) => {
   process.nextTick(() => done(null, profile));
 }));
 
+// ---- CSRF: per-session token, required on every POST ----
+function csrfToken(req) {
+  return (req.session.csrfToken ||= crypto.randomBytes(24).toString('hex'));
+}
+
+app.use((req, res, next) => {
+  if (req.method !== 'POST') return next();
+  const expected = req.session?.csrfToken;
+  const given = req.body?._csrf;
+  const ok = expected && typeof given === 'string' && given.length === expected.length &&
+    crypto.timingSafeEqual(Buffer.from(given), Buffer.from(expected));
+  if (!ok) {
+    logDashboard(`Rejected POST ${req.path}: bad CSRF token (user: ${req.user?.id || 'unknown'})`);
+    return res.status(403).send('Invalid or expired form. Go back, refresh the page and try again.');
+  }
+  next();
+});
+
 function ensureAuthenticated(req, res, next) {
   if (req.isAuthenticated()) return next();
+  if (req.path.startsWith('/api/')) return res.status(401).json({ error: 'Not signed in' });
   res.redirect('/login');
 }
 
@@ -60,9 +143,6 @@ app.get('/auth/discord/callback', passport.authenticate('discord', { failureRedi
 app.get('/logout', (req, res) => {
   req.logout(() => res.redirect('/'));
 });
-
-// Only allow access to dashboard if user is an admin in the Discord server
-const fetch = (...args) => import('node-fetch').then(({default: fetch}) => fetch(...args));
 
 const ADMIN_PERMISSION = 0x8n;
 const MANAGE_GUILD_PERMISSION = 0x20n;
@@ -75,120 +155,83 @@ const BOT_COMMANDS = [
   { name: '/setvoicechannel', description: 'Set the default voice channel used for event auto-start.' },
   { name: '/setadminrole', description: 'Set the role allowed to manage restricted admin commands for this server.' },
   { name: '/setarchivethread', description: 'Set an existing thread for archived event posts.' },
-  { name: '/seteventtime', description: 'Set the default event time format for this server.' },
-  { name: '/reschedulemovie', description: 'Move a scheduled movie to a different date.' },
+  { name: '/seteventtime', description: 'Set the regular event day and time for this server (e.g. Saturday 20:00).' },
+  { name: '/reschedulemovie', description: 'Move a scheduled movie (by the # ID shown below) to a different date.' },
   { name: '/rsvp', description: 'RSVP for movie night and receive notifications.' },
   { name: '/unrsvp', description: 'Remove your RSVP/notification role for movie nights.' },
   { name: '/setschedulemsg', description: 'Pin schedule updates to a specific message ID in the schedule channel.' },
+  { name: '/linkplex', description: 'Link your Plex username so watching on Plex counts toward attendance.' },
+  { name: '/unlinkplex', description: 'Unlink your Plex username.' },
 ];
 
-function hasAdminPermission(permissions) {
+
+function hasPermission(permissions, flag) {
   try {
-    return (BigInt(permissions || '0') & ADMIN_PERMISSION) === ADMIN_PERMISSION;
+    return (BigInt(permissions || '0') & flag) === flag;
   } catch {
     return false;
   }
 }
 
-function hasManageGuildPermission(permissions) {
+// Short-lived per-user cache of which servers they can manage
+const ACCESS_TTL = 60 * 1000;
+const accessCache = new Map(); // userId -> { report, at }
+
+async function checkGuildAccess(user, guild) {
   try {
-    return (BigInt(permissions || '0') & MANAGE_GUILD_PERMISSION) === MANAGE_GUILD_PERMISSION;
-  } catch {
-    return false;
-  }
-}
-
-function getGuildsUserCanManage(user) {
-  return Array.isArray(user?.guilds) ? user.guilds : [];
-}
-
-async function filterGuildsBotIsIn(guilds) {
-  if (!Array.isArray(guilds) || guilds.length === 0) return [];
-  if (!process.env.DISCORD_TOKEN) return [];
-
-  const checks = await Promise.all(guilds.map(async guild => {
-    try {
-      const url = `https://discord.com/api/v10/guilds/${guild.id}`;
-      const res = await fetch(url, {
-        headers: { Authorization: `Bot ${process.env.DISCORD_TOKEN}` }
-      });
-      return res.ok ? guild : null;
-    } catch {
-      return null;
+    const botGuild = client.guilds.cache.get(guild.id);
+    if (!botGuild) {
+      return { guild, included: false, reason: 'bot_not_in_server' };
     }
-  }));
-
-  return checks.filter(Boolean);
-}
-
-async function getDashboardGuilds(user) {
-  const report = await getDashboardGuildAccessReport(user);
-  return report.included;
+    if (hasPermission(guild.permissions, ADMIN_PERMISSION) || hasPermission(guild.permissions, MANAGE_GUILD_PERMISSION)) {
+      return { guild, included: true };
+    }
+    const { adminRoleId } = getGuildConfig(guild.id);
+    if (!adminRoleId) {
+      return { guild, included: false, reason: 'no_admin_permission_and_no_admin_role_configured' };
+    }
+    const member = await botGuild.members.fetch(user.id).catch(() => null);
+    if (!member) {
+      return { guild, included: false, reason: 'member_lookup_failed' };
+    }
+    return member.roles.cache.has(adminRoleId)
+      ? { guild, included: true }
+      : { guild, included: false, reason: 'missing_configured_admin_role' };
+  } catch {
+    return { guild, included: false, reason: 'validation_error' };
+  }
 }
 
 async function getDashboardGuildAccessReport(user) {
-  const userGuilds = getGuildsUserCanManage(user);
-  const included = [];
-  const excluded = [];
-
-  if (!process.env.DISCORD_TOKEN) {
-    return {
-      included,
-      excluded: userGuilds.map(g => ({ guild: g, reason: 'missing_bot_token' })),
-    };
+  const userGuilds = Array.isArray(user?.guilds) ? user.guilds : [];
+  if (!client?.isReady()) {
+    return { included: [], excluded: userGuilds.map(g => ({ guild: g, reason: 'bot_not_ready' })) };
   }
+  const hit = accessCache.get(user.id);
+  if (hit && Date.now() - hit.at < ACCESS_TTL) return hit.report;
 
-  const checks = await Promise.all(userGuilds.map(async guild => {
-    try {
-      const guildUrl = `https://discord.com/api/v10/guilds/${guild.id}`;
-      const guildRes = await fetch(guildUrl, {
-        headers: { Authorization: `Bot ${process.env.DISCORD_TOKEN}` }
-      });
-      if (!guildRes.ok) {
-        return { guild, included: false, reason: 'bot_not_in_server' };
-      }
+  const checks = await Promise.all(userGuilds.map(guild => checkGuildAccess(user, guild)));
+  const report = {
+    included: checks.filter(c => c.included).map(c => c.guild),
+    excluded: checks.filter(c => !c.included).map(c => ({ guild: c.guild, reason: c.reason })),
+  };
+  accessCache.set(user.id, { report, at: Date.now() });
+  return report;
+}
 
-      if (hasAdminPermission(guild.permissions) || hasManageGuildPermission(guild.permissions)) {
-        return { guild, included: true };
-      }
+async function getDashboardGuilds(user) {
+  return (await getDashboardGuildAccessReport(user)).included;
+}
 
-      const guildConfig = getGuildConfig(guild.id);
-      if (!guildConfig.adminRoleId) {
-        return { guild, included: false, reason: 'no_admin_permission_and_no_admin_role_configured' };
-      }
-
-      const memberUrl = `https://discord.com/api/v10/guilds/${guild.id}/members/${user.id}`;
-      const memberRes = await fetch(memberUrl, {
-        headers: { Authorization: `Bot ${process.env.DISCORD_TOKEN}` }
-      });
-      if (!memberRes.ok) {
-        return { guild, included: false, reason: 'member_lookup_failed' };
-      }
-
-      const memberData = await memberRes.json();
-      if (!Array.isArray(memberData.roles)) {
-        return { guild, included: false, reason: 'member_lookup_failed' };
-      }
-
-      if (memberData.roles.includes(guildConfig.adminRoleId)) {
-        return { guild, included: true };
-      }
-
-      return { guild, included: false, reason: 'missing_configured_admin_role' };
-    } catch {
-      return { guild, included: false, reason: 'validation_error' };
-    }
-  }));
-
-  checks.forEach(result => {
-    if (result.included) {
-      included.push(result.guild);
-    } else {
-      excluded.push({ guild: result.guild, reason: result.reason });
-    }
+// Map user IDs to display names via the bot's (cached) user lookups
+async function resolveUsernames(ids) {
+  const unique = [...new Set(ids.filter(Boolean))];
+  const users = await Promise.all(unique.map(id => client.users.fetch(id).catch(() => null)));
+  const map = {};
+  users.forEach(u => {
+    if (u) map[u.id] = u.username + (u.discriminator && u.discriminator !== '0' ? '#' + u.discriminator : '');
   });
-
-  return { included, excluded };
+  return map;
 }
 
 function pickGuildId(req, manageableGuilds) {
@@ -200,10 +243,33 @@ function pickGuildId(req, manageableGuilds) {
   return manageableGuilds[0].id;
 }
 
-async function isAdmin(user, guildId, availableGuilds) {
-  if (!guildId) return false;
-  const manageableGuilds = Array.isArray(availableGuilds) ? availableGuilds : await getDashboardGuilds(user);
-  return manageableGuilds.some(g => g.id === guildId);
+// Resolve the selected guild for an admin request (null if the user can't manage any)
+async function getAuthorizedGuild(req) {
+  const manageableGuilds = await getDashboardGuilds(req.user);
+  return { manageableGuilds, guild_id: pickGuildId(req, manageableGuilds) };
+}
+
+// Middleware for changes: the posted guild_id must be one the user manages (no fallback to another server)
+async function requireManagedGuild(req, res, next) {
+  const manageableGuilds = await getDashboardGuilds(req.user);
+  const requested = req.body?.guild_id || req.query.guild_id;
+  if (!requested || !manageableGuilds.some(g => g.id === requested)) {
+    return req.path.startsWith('/api/') ? res.status(403).json({ error: 'Forbidden' }) : res.status(403).send('Forbidden');
+  }
+  req.guildId = requested;
+  next();
+}
+
+// Flash message shown once on the next dashboard load, then back to the dashboard
+function done(req, res, type, message) {
+  req.session.flash = { type, message };
+  // Save before redirecting, or the next page load can race the (file-backed) session write
+  req.session.save(() => res.redirect(`/?guild_id=${req.guildId}`));
+}
+
+// Re-render the Discord schedule message in the background after a change
+function syncSchedule(guildId) {
+  refreshScheduleMessage(guildId).catch(e => logDashboard(`Failed to refresh schedule message for ${guildId}: ${e.message}`));
 }
 
 const logStream = rfs.createStream('dashboard.log', {
@@ -217,125 +283,260 @@ function logDashboard(msg) {
 }
 
 app.get('/', ensureAuthenticated, async (req, res) => {
-  const guildAccess = await getDashboardGuildAccessReport(req.user);
-  const manageableGuilds = guildAccess.included;
-  const guild_id = pickGuildId(req, manageableGuilds);
-  if (!guild_id || !(await isAdmin(req.user, guild_id, manageableGuilds))) {
+  const { manageableGuilds, guild_id } = await getAuthorizedGuild(req);
+  if (!guild_id) {
     return res.status(403).send('You must be an admin for the selected Discord server to access this dashboard.');
   }
-  // Get all scheduled movies and build a map by date
-  const upcoming = await schedule.getUpcomingSchedule(guild_id);
-  // Find the next Saturday from today (skip today if after 8PM)
-  const now = new Date();
-  let nextSaturday = new Date(now);
-  nextSaturday.setHours(20, 0, 0, 0); // 8PM
-  const day = nextSaturday.getDay();
-  if (!(day === 6 && now < nextSaturday)) {
-    const daysUntilSaturday = (6 - day + 7) % 7 || 7;
-    nextSaturday.setDate(nextSaturday.getDate() + daysUntilSaturday);
-  }
-  // Build a list of all Saturdays (8PM) until the end of the year
-  const year = now.getFullYear();
-  let saturdays = [];
-  let d = new Date(nextSaturday);
-  while (d.getFullYear() === year) {
-    saturdays.push(new Date(d));
-    d.setDate(d.getDate() + 7);
-  }
-  // Add all special event dates (non-Saturdays) from the database
-  const allDatesSet = new Set(saturdays.map(date => date.toISOString().slice(0, 10)));
-  upcoming.forEach(m => {
-    if (m.date && !allDatesSet.has(m.date)) {
-      allDatesSet.add(m.date);
-    }
-  });
-  const allDates = Array.from(allDatesSet).sort();
-  // Build movieByDate, addedByByDate, userMap
-  const { userMap } = await buildScheduleMappings(upcoming, process.env.DISCORD_TOKEN);
-  const mappings = await buildScheduleMappings(upcoming, process.env.DISCORD_TOKEN);
-  const dashboardSchedule = mappings.dashboardSchedule;
-  const archived = await schedule.getArchivedEvents(guild_id);
-  // Fetch RSVP and attendance lists
-  const rsvps = roles.getRSVPs ? roles.getRSVPs() : [];
-  const attendance = roles.getAttendance ? roles.getAttendance() : [];
-  // Build a mapping of date -> movies for dashboard (include unscheduled)
-  const dashboardByDate = {};
-  allDates.forEach(dateStr => {
-    dashboardByDate[dateStr] = dashboardSchedule.filter(m => m.date === dateStr);
-  });
-  // Render the dashboard with the schedule data
+  // Get all scheduled and archived movies
+  const [upcoming, archived, rsvps, latestAttendance] = await Promise.all([
+    schedule.getUpcomingSchedule(guild_id),
+    schedule.getArchivedEvents(guild_id),
+    roles.getRSVPs(guild_id),
+    roles.getLatestAttendance(guild_id),
+  ]);
+  // Regular event dates for the coming weeks, plus any special-event dates from the database
+  const settings = getEventSettings(guild_id);
+  const allDates = Array.from(new Set([
+    ...upcomingEventDates(settings),
+    ...upcoming.map(m => m.date).filter(Boolean),
+  ])).sort();
+  const { dashboardSchedule } = await buildScheduleMappings(upcoming);
+  const attendance = latestAttendance.users;
+  const userMap = await resolveUsernames([...upcoming.map(m => m.added_by), ...rsvps, ...attendance]);
+  const dashboardByDate = Object.fromEntries(allDates.map(d => [d, []]));
+  dashboardSchedule.forEach(m => { if (m.date) dashboardByDate[m.date].push(m); });
+  // Exact start instant per date; the browser formats it in the viewer's own timezone
+  const eventTimes = Object.fromEntries(allDates.map(d => {
+    const start = eventStart(d, settings);
+    return [d, { iso: start.toISO(), fallback: start.toFormat("cccc, LLLL d, yyyy '·' h:mm a ZZZZ") }];
+  }));
+  const nextStart = eventStart(upcomingEventDates(settings, 1)[0], settings);
+  // Plex/Seerr/Radarr availability per scheduled movie (cached; null when no integrations)
+  const availability = Object.fromEntries(await Promise.all(upcoming.map(async m =>
+    [m.id, await integrations.getAvailability(guild_id, m).catch(() => null)])));
+  const integrationView = await integrationsForView(req, guild_id);
+  const flash = req.session.flash;
+  delete req.session.flash;
   res.render('dashboard', {
-    dashboardSchedule,
     dashboardByDate,
     allDates,
     archived,
     user: req.user,
     rsvps,
     attendance,
+    attendanceDate: latestAttendance.date,
+    eventWeekday: settings.weekday,
+    eventTimes,
+    eventWeekdayName: nextStart.toFormat('cccc'),
+    // Recurring label, e.g. "Saturdays at 8:00 PM EST" (re-localized in the browser)
+    eventTimeLabel: { iso: nextStart.toISO(), fallback: nextStart.toFormat("cccc's at' h:mm a ZZZZ") },
+    today: todayStr(settings),
     userMap,
-    upcoming,
     botCommands: BOT_COMMANDS,
     guilds: manageableGuilds,
     selectedGuildId: guild_id,
+    csrfToken: csrfToken(req),
+    flash,
+    availability,
+    integrations: integrationView,
   });
   logDashboard(`Route: / by ${req.user?.id || 'unknown'}`);
 });
 
-// Delete an archived event
-app.post('/delete-archived/:id', ensureAuthenticated, async (req, res) => {
-  const manageableGuilds = await getDashboardGuilds(req.user);
-  const guild_id = pickGuildId(req, manageableGuilds);
-  if (!guild_id || !(await isAdmin(req.user, guild_id, manageableGuilds))) return res.status(403).send('Forbidden');
-  const id = req.params.id;
-  await schedule.removeMovie(id, guild_id);
-  res.redirect(`/?guild_id=${guild_id}`);
-  logDashboard(`Deleted archived event ${id} by ${req.user.id}`);
-});
+// Integration settings for the template: never includes secrets, only whether they're saved
+async function integrationsForView(req, guildId) {
+  const i = await integrationStore.getIntegrations(guildId);
+  const base = (process.env.DASHBOARD_PUBLIC_URL || `${req.protocol}://${req.get('host')}`).replace(/\/+$/, '');
+  return {
+    plex: { url: i.plex.url, hasToken: Boolean(i.plex.token), serverName: i.plex.serverName, connected: Boolean(i.plex.machineId) },
+    seerr: { url: i.seerr.url, hasKey: Boolean(i.seerr.apiKey) },
+    radarr: { url: i.radarr.url, hasKey: Boolean(i.radarr.apiKey), qualityProfileId: i.radarr.qualityProfileId, rootFolder: i.radarr.rootFolder },
+    autoRequest: i.autoRequest,
+    plexWebhooks: i.plexWebhooks,
+    tautulliWebhooks: i.tautulliWebhooks,
+    voteWhenEmpty: i.voteWhenEmpty,
+    voteTheme: i.voteTheme,
+    plexWebhookUrl: `${base}/webhooks/plex/${guildId}/${i.webhookToken}`,
+    tautulliWebhookUrl: `${base}/webhooks/tautulli/${guildId}/${i.webhookToken}`,
+    tautulliTemplate: playback.TAUTULLI_TEMPLATE,
+    canRequest: integrationStore.isSeerrConfigured(i) || integrationStore.isRadarrConfigured(i),
+  };
+}
 
-// Add a route to handle /delete-archived with no id (show error)
-app.post('/delete-archived', ensureAuthenticated, (req, res) => {
-  logDashboard(`Attempted delete-archived with no ID by ${req.user?.id || 'unknown'}`);
-  res.status(400).send('Missing archived event ID.');
-});
-
-// Archive a movie (set status to archived and set date to next available Saturday, and sync with Discord)
-app.post('/archive/:id', ensureAuthenticated, async (req, res) => {
-  const manageableGuilds = await getDashboardGuilds(req.user);
-  const guild_id = pickGuildId(req, manageableGuilds);
-  if (!guild_id || !(await isAdmin(req.user, guild_id, manageableGuilds))) return res.status(403).send('Forbidden');
-  const id = req.params.id;
-  // Find the movie info
-  const upcoming = await schedule.getUpcomingSchedule(guild_id);
-  const movie = upcoming.find(m => m.id == id);
-  if (!movie) return res.status(404).send('Movie not found');
-  // Calculate next available Saturday at 8PM EST (sync with bot logic)
-  const now = new Date();
-  let nextSaturday = new Date(now);
-  nextSaturday.setDate(now.getDate() + ((6 - now.getDay() + 7) % 7));
-  nextSaturday.setHours(20, 0, 0, 0); // 8PM
-  // If this movie is not the first, add weeks
-  const index = upcoming.findIndex(m => m.id == id);
-  if (index > 0) {
-    nextSaturday.setDate(nextSaturday.getDate() + (index * 7));
-  }
-  const archiveDate = nextSaturday.toISOString().slice(0, 10);
-  await schedule.archiveEvent(id, archiveDate, guild_id);
-
-  // Discord sync: post to archive thread
-  try {
-    const { Client, GatewayIntentBits } = require('discord.js');
-    const client = require('./bot').client || global._dashboardBotClient;
-    const guildConfig = getGuildConfig(guild_id);
-    if (client && client.isReady()) {
-      const guild = await client.guilds.fetch(guild_id);
-      const thread = await resolveArchiveThread(guild, guildConfig);
-      await thread.send(`**${movie.title}** was watched on ${archiveDate}.`);
+// Build the next config from the integrations form; blank secret fields keep the saved value.
+// Returns { next, error }.
+function integrationsFromForm(body, current) {
+  const next = structuredClone(current);
+  for (const [kind, secretField, secretKey] of [['plex', 'plex_token', 'token'], ['seerr', 'seerr_key', 'apiKey'], ['radarr', 'radarr_key', 'apiKey']]) {
+    const { url, error } = normalizeBaseUrl(body[`${kind}_url`]);
+    if (error) return { error: `${kind[0].toUpperCase()}${kind.slice(1)}: ${error}` };
+    if (!url) {
+      // Clearing the URL removes the integration (and its secret)
+      next[kind] = { ...next[kind], url: '', [secretKey]: '' };
+      continue;
     }
-  } catch (e) {
-    // Ignore Discord sync errors for dashboard
+    if (url !== next[kind].url && kind === 'plex') next.plex.machineId = '';
+    next[kind].url = url;
+    const secret = String(body[secretField] || '').trim();
+    if (secret) next[kind][secretKey] = secret;
   }
-  res.redirect(`/?guild_id=${guild_id}`);
-  logDashboard(`Archived event ${id} to ${archiveDate} by ${req.user.id}`);
+  if (body.radarr_profile !== undefined) next.radarr.qualityProfileId = body.radarr_profile ? Number(body.radarr_profile) : null;
+  if (body.radarr_root !== undefined) next.radarr.rootFolder = String(body.radarr_root || '');
+  next.autoRequest = body.auto_request === 'on';
+  next.plexWebhooks = body.plex_webhooks === 'on';
+  next.tautulliWebhooks = body.tautulli_webhooks === 'on';
+  next.voteWhenEmpty = body.vote_when_empty === 'on';
+  next.voteTheme = body.vote_theme === 'season' ? 'season' : 'month';
+  return { next };
+}
+
+// Save integration settings (tests Plex to record its server identity for webhook verification)
+app.post('/integrations', ensureAuthenticated, requireManagedGuild, async (req, res) => {
+  const current = await integrationStore.getIntegrations(req.guildId);
+  const { next, error } = integrationsFromForm(req.body, current);
+  if (error) return done(req, res, 'error', error);
+  const notes = [];
+  if (integrationStore.isPlexConfigured(next) && !next.plex.machineId) {
+    try {
+      const info = await testPlex(req.guildId, next.plex);
+      next.plex.machineId = info.machineId;
+      next.plex.serverName = info.serverName;
+    } catch (e) {
+      notes.push(`Plex: ${e.message}`);
+    }
+  }
+  if (integrationStore.isRadarrConfigured(next) && !integrationStore.isSeerrConfigured(next) && (!next.radarr.qualityProfileId || !next.radarr.rootFolder)) {
+    notes.push('Radarr: use "Test" to pick a quality profile and root folder, or requests will fail.');
+  }
+  if (next.voteWhenEmpty && !integrationStore.isPlexConfigured(next)) notes.push('Movie vote: needs Plex set up to pick movies.');
+  if (next.plexWebhooks && !integrationStore.isPlexConfigured(next)) notes.push('Plex webhooks: also set up the Plex server so events can be verified.');
+  await integrationStore.saveIntegrations(req.guildId, next);
+  logDashboard(`Integrations updated for ${req.guildId} by ${req.user.id}`);
+  done(req, res, notes.length ? 'error' : 'ok', notes.length ? `Saved, but: ${notes.join(' ')}` : 'Integrations saved.');
+});
+
+// Test a connection using the form's current values (blank secret = saved one). JSON response.
+app.post('/api/integrations/test', ensureAuthenticated, requireManagedGuild, async (req, res) => {
+  const kind = req.body.kind;
+  const testers = { plex: testPlex, seerr: testSeerr, radarr: testRadarr };
+  if (!testers[kind]) return res.status(400).json({ ok: false, error: 'Unknown integration' });
+  const { next, error } = integrationsFromForm(req.body, await integrationStore.getIntegrations(req.guildId));
+  if (error) return res.json({ ok: false, error });
+  const cfg = next[kind];
+  if (!cfg.url) return res.json({ ok: false, error: 'Enter a URL first.' });
+  if (!(cfg.token || cfg.apiKey)) return res.json({ ok: false, error: 'Enter the token / API key first.' });
+  try {
+    res.json({ ok: true, ...(await testers[kind](req.guildId, cfg)) });
+  } catch (e) {
+    res.json({ ok: false, error: e.message });
+  }
+});
+
+// New webhook secret (invalidates the old Plex/Tautulli URLs)
+app.post('/integrations/regenerate-webhook', ensureAuthenticated, requireManagedGuild, async (req, res) => {
+  const current = await integrationStore.getIntegrations(req.guildId);
+  await integrationStore.saveIntegrations(req.guildId, { ...current, webhookToken: crypto.randomBytes(24).toString('hex') });
+  logDashboard(`Webhook token regenerated for ${req.guildId} by ${req.user.id}`);
+  done(req, res, 'ok', 'New webhook URLs generated. Update them in Plex/Tautulli.');
+});
+
+// Request a scheduled movie in Seerr/Radarr
+app.post('/movies/:id/request', ensureAuthenticated, requireManagedGuild, async (req, res) => {
+  const movie = await schedule.getScheduledMovie(req.params.id, req.guildId);
+  if (!movie) return done(req, res, 'error', 'That movie is no longer on the schedule.');
+  const result = await integrations.requestMovie(req.guildId, movie);
+  done(req, res, result.ok ? 'ok' : 'error', result.message);
+});
+
+// TMDB search for the "Add a movie" form (JSON)
+app.get('/api/search', ensureAuthenticated, requireManagedGuild, async (req, res) => {
+  const q = String(req.query.q || '').trim();
+  const year = /^\d{4}$/.test(req.query.year || '') ? req.query.year : undefined;
+  if (!q) return res.json({ results: [] });
+  try {
+    const results = (await tmdb.searchMovie(q, year)) || [];
+    results.sort((a, b) => (b.popularity || 0) - (a.popularity || 0));
+    res.json({
+      results: results.slice(0, 10).map(m => ({
+        id: m.id,
+        title: m.title,
+        year: m.release_date ? m.release_date.slice(0, 4) : '',
+      })),
+    });
+  } catch (e) {
+    res.status(502).json({ error: 'TMDB search failed' });
+  }
+});
+
+// Add a movie by TMDB id (date optional: defaults to the next free regular date)
+app.post('/movies', ensureAuthenticated, requireManagedGuild, async (req, res) => {
+  const tmdbId = Number(req.body.tmdb_id);
+  if (!Number.isInteger(tmdbId) || tmdbId <= 0) return done(req, res, 'error', 'Pick a movie from the search results.');
+  const date = String(req.body.date || '').trim();
+  const dateError = date && validateEventDate(date, getEventSettings(req.guildId));
+  if (dateError) return done(req, res, 'error', dateError);
+  let details;
+  try {
+    details = await tmdb.getMovieDetails(tmdbId);
+  } catch {
+    return done(req, res, 'error', 'Couldn\'t load that movie from TMDB. Try again.');
+  }
+  const scheduleDate = date || await nextFreeEventDate(req.guildId);
+  await schedule.addMovie({
+    guild_id: req.guildId,
+    title: details.title,
+    tmdb_id: tmdbId,
+    date: scheduleDate,
+    added_by: req.user.id,
+    release_date: details.release_date,
+  });
+  syncSchedule(req.guildId);
+  logDashboard(`Added ${details.title} (${tmdbId}) on ${scheduleDate} by ${req.user.id}`);
+  const status = await integrations.afterMovieAdded(req.guildId, { tmdb_id: tmdbId, title: details.title, release_date: details.release_date }).catch(() => '');
+  done(req, res, 'ok', `Added ${details.title} on ${scheduleDate}.${status ? ' ' + status : ''}`);
+});
+
+// Move a scheduled movie to another date
+app.post('/movies/:id/reschedule', ensureAuthenticated, requireManagedGuild, async (req, res) => {
+  const movie = await schedule.getScheduledMovie(req.params.id, req.guildId);
+  if (!movie) return done(req, res, 'error', 'That movie is no longer on the schedule.');
+  const date = String(req.body.date || '').trim();
+  const dateError = validateEventDate(date, getEventSettings(req.guildId));
+  if (dateError) return done(req, res, 'error', dateError);
+  if (date === movie.date) return done(req, res, 'ok', `${movie.title} is already on ${date}.`);
+  await schedule.rescheduleMovie(movie.id, date, req.guildId);
+  syncSchedule(req.guildId);
+  logDashboard(`Rescheduled ${movie.id} from ${movie.date} to ${date} by ${req.user.id}`);
+  done(req, res, 'ok', `Moved ${movie.title} to ${date}.`);
+});
+
+// Archive a scheduled movie (watched date: its scheduled date, or today if archived early)
+app.post('/movies/:id/archive', ensureAuthenticated, requireManagedGuild, async (req, res) => {
+  const movie = await schedule.getScheduledMovie(req.params.id, req.guildId);
+  if (!movie) return done(req, res, 'error', 'That movie is no longer on the schedule.');
+  const today = todayStr(getEventSettings(req.guildId));
+  const archiveDate = movie.date && movie.date <= today ? movie.date : today;
+  await schedule.archiveEvent(movie.id, archiveDate, req.guildId);
+  syncSchedule(req.guildId);
+
+  // Discord sync: post to the archive thread (creates it if needed)
+  const guild = client.guilds.cache.get(req.guildId);
+  if (guild) {
+    resolveArchiveThread(guild, getGuildConfig(req.guildId))
+      .then(thread => thread.send(`**${movie.title}** was watched on ${archiveDate}.`))
+      .catch(e => logDashboard(`Failed to post archive message for ${movie.id}: ${e.message}`));
+  }
+  if (guild) clearWatchingIfArchived(guild, [movie.id]).catch(() => {});
+  logDashboard(`Archived ${movie.id} to ${archiveDate} by ${req.user.id}`);
+  done(req, res, 'ok', `Archived ${movie.title}.`);
+});
+
+// Delete a movie (scheduled or archived)
+app.post('/movies/:id/delete', ensureAuthenticated, requireManagedGuild, async (req, res) => {
+  await schedule.removeMovie(req.params.id, req.guildId);
+  syncSchedule(req.guildId);
+  logDashboard(`Deleted ${req.params.id} by ${req.user.id}`);
+  done(req, res, 'ok', 'Deleted.');
 });
 
 // Error handler for uncaught errors in routes
@@ -344,10 +545,22 @@ app.use((err, req, res, next) => {
   res.status(500).send('Internal server error.');
 });
 
-// TODO: Add routes for add/remove/reschedule/config
+function startDashboard(discordClient, options = {}) {
+  if (PLACEHOLDER_SECRETS.has(DASHBOARD_SECRET || '')) {
+    throw new Error('DASHBOARD_SECRET is not set in .env. Set it to a long random string (e.g. `openssl rand -hex 32`).');
+  }
+  client = discordClient;
+  if (options.refreshScheduleMessage) refreshScheduleMessage = options.refreshScheduleMessage;
+  const PORT = process.env.DASHBOARD_PORT || 3000;
+  return app.listen(PORT, () => {
+    console.log(`Web dashboard running at http://localhost:${PORT}`);
+    logDashboard('Dashboard started');
+  });
+}
 
-const PORT = process.env.DASHBOARD_PORT || 3000;
-app.listen(PORT, () => {
-  console.log(`Web dashboard running at http://localhost:${PORT}`);
-  logDashboard('Dashboard started');
-});
+module.exports = { startDashboard };
+
+if (require.main === module) {
+  console.error('The dashboard now runs inside the bot process. Start everything with: npm start (node src/index.js)');
+  process.exit(1);
+}
